@@ -15,7 +15,7 @@ decodes its request as described and then answers `501 not_implemented`.
   with `Allow`; a path outside the routes is `404 not_found`.
 - A signed-in request carries its token as `Authorization: Bearer <token>` or,
   from a page, in the `vif_sign_in` cookie (`HttpOnly`, `Secure`,
-  `SameSite=Strict`, path `/vif/api/`). A request with neither, or with a
+  `SameSite=Strict`, path `/vif/`). A request with neither, or with a
   revoked or expired token, is `401 unauthorized`.
 - Budgets per client address, the one the router forwards in the configured
   header: `429 too_many_attempts` with `Retry-After` past 5 registrations, 10

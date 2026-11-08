@@ -5,6 +5,7 @@
 package introspect
 
 import (
+	"errors"
 	"log/slog"
 	"net/http"
 	"time"
@@ -75,5 +76,30 @@ func (h *Handler) answer(w http.ResponseWriter, r *http.Request) *api.Refusal {
 	if req.Token == "" {
 		return &api.Refusal{Status: http.StatusBadRequest, Code: "malformed_request", Message: "A token is required"}
 	}
-	return &api.Refusal{Status: http.StatusNotImplemented, Code: "not_implemented", Message: "Introspection is not implemented yet"}
+	in, a, err := h.store.SignInByToken(r.Context(), store.HashToken(req.Token))
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		api.WriteJSON(w, http.StatusOK, Response{})
+		return nil
+	case err != nil:
+		h.logger.Error("introspection failed", "error", err)
+		return &api.Refusal{Status: http.StatusServiceUnavailable, Code: "busy", Message: "The service cannot answer now"}
+	}
+	resp := Response{Account: &Account{ID: a.ID, Name: a.Name}}
+	// A sign-in seen past half its life slides forward on this question; one
+	// revoked between the lookup and the renewal names no account, and a
+	// renewal that failed otherwise still answers, since the lookup held.
+	if now := store.Now(); now.After(in.ExpiresAt.Add(-store.SignInLifetime / 2)) {
+		switch err := h.store.RenewSignIn(r.Context(), in.ID, now); {
+		case errors.Is(err, store.ErrNotFound):
+			api.WriteJSON(w, http.StatusOK, Response{})
+			return nil
+		case err != nil:
+			h.logger.Error("renewal failed", "error", err)
+		default:
+			resp.Renewed = true
+		}
+	}
+	api.WriteJSON(w, http.StatusOK, resp)
+	return nil
 }

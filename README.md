@@ -30,7 +30,7 @@ lists what follows, in order.
   names. A renewal of the sign-in past half its life rides the same request.
 - The game's `:login <site>` and `:logout`, and the site's lobby page, are its
   clients; a page keeps its sign-in in an `HttpOnly`, `Secure`,
-  `SameSite=Strict` cookie scoped to `/vif/api/`, a terminal in a 0600 file,
+  `SameSite=Strict` cookie scoped to `/vif/`, a terminal in a 0600 file,
   Android in private storage.
 - Accounts live in PostgreSQL 18 in a FreeBSD jail, reached from the node over
   the host's internal network with TLS and a SCRAM-SHA-256 role password read
