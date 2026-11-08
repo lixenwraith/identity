@@ -4,8 +4,8 @@ What the service decided and why, how its packages fit, how each flow runs,
 what it refuses and where it runs. The decisions it inherits are vif's
 ([authentication and session design](https://github.com/lixenwraith/vif/blob/main/doc/auth-session-design.md),
 D8 to D11, D17, §7.5, §8 phase 5, §9); the ones below are the service's own,
-each with the alternative it passed over. What the scaffold leaves out is §5
-and [todo.md](todo.md).
+each with the alternative it passed over. What remains is §5 and
+[todo.md](todo.md).
 
 ## 0. Decisions
 
@@ -19,6 +19,17 @@ and [todo.md](todo.md).
   instead (`verify-full` is the only mode), and sends the password as given
   without SASLprep, so the role's password is printable ASCII, which `openssl
   rand -base64` produces. The SCRAM arithmetic is pinned to RFC 7677's vectors.
+- **D1a. One file stands in for the database where there is none** (`store.File`):
+  the same accounts, verifiers and sign-ins in one JSON file, 0600, read at
+  open and rewritten whole through a rename on every change, held by a lock
+  beside it while a writer is open. The `store.Store` interface is what the
+  handlers and the commands see, so neither knows which holds the rows. It is
+  for a deployment too small for a jail and for the tests, which now run
+  without PostgreSQL and against it in CI; a rewrite per change is a few
+  kilobytes at that scale, and a service that outgrows it moves to the
+  database, since the operator's `account` commands are the same. Passed over:
+  SQLite, a C dependency or a Go port the size of the service; an embedded
+  key-value store, a dependency for three tables.
 - **D2. A sign-in is opaque.** 32 random bytes in the bearer alphabet, whose
   SHA-256 the store keeps; one per device, named, revocable one by one, sliding
   over 30 days and renewed past half its life on the router's question. A JWT
@@ -64,8 +75,10 @@ and [todo.md](todo.md).
   registration, sign-in and deletion are bounded per address as chess bounds
   them (5, 10 and 5 a minute), accounts by `-max-accounts`, in-flight
   handshakes by the SCRAM server's 4096, and every body by 4096 bytes before it
-  is decoded. The table is logwisp's shape: a burst, a rate, the unfinished
-  exchanges one address may hold, refunded on success and drained on failure.
+  is decoded. The table is logwisp's shape: a burst, a rate, an IPv6 address
+  counted by its /64; a sign-in's attempt is refunded on success and kept on
+  failure, and an exchange without its proof is abandoned after the handshake
+  timeout, so an address holds at most its burst of them.
 - **D9. A name has one spelling.** Lowercase, `^[a-z][a-z0-9_-]{0,31}$`, checked
   by the store and by the schema alike, so what the coordinator copies onto a
   roster entry (vif's D15) needs no escaping and two spellings are one account.
@@ -77,21 +90,25 @@ and [todo.md](todo.md).
 ## 1. Shape
 
 ```
-cmd/identity          flags → config; wires the rest; two http.Servers; shutdown
+cmd/identity          flags → config; wires the rest; two http.Servers; the sweep; shutdown;
+                      the operator's migrate and account commands
 internal/config       the flags and their checks; ReadSecretFile; the KDF profile
 internal/pg           the PostgreSQL client: Config, ParseURL, TLSConfig, Pool, Tx, Rows, Error
-internal/store        accounts, verifiers, sign-ins: one statement a method; Migrate, CheckSchema
-internal/api          /vif/api/auth/: the routes table, Refusal, ReadJSON, the request and answer shapes
+internal/store        Store, the interface; PG, one statement a method, Migrate, CheckSchema; File, one JSON file
+internal/api          /vif/api/auth/: the routes table, the handlers, the budgets, Refusal, ReadJSON
 internal/introspect   POST /introspect on the second listener
+internal/dbtest       the test database the environment names; a test skips without one
+internal/storetest    the store a test runs against: PostgreSQL when named, a file otherwise
 internal/version      the build's identity
 schema                setup.sql, the numbered migrations, Migrations()
 ```
 
 Dependencies point down: `api` and `introspect` use `store`, `store` uses `pg`
 and `schema`, `config` uses `pg` for the URL's check, `introspect` uses `api`
-for the error form. `cmd/identity` alone knows every package. The only module
-beyond the standard library is `lixenwraith/auth`, for `Credential`,
-`ScramServer` and the SCRAM message types the API carries.
+for the error form, and the tests use `dbtest`, which uses `pg`. `cmd/identity`
+alone knows every package, and alone chooses the store. The only module beyond the standard library is
+`lixenwraith/auth`, for `Credential`, `ScramServer` and the SCRAM message types
+the API carries.
 
 ## 2. Flows
 
@@ -101,11 +118,13 @@ beyond the standard library is `lixenwraith/auth`, for `Credential`,
   creates the account and its verifier under one advisory lock with the cap;
   the SCRAM server takes the credential; `201` with the id.
 - **Sign-in.** The client first is passed to `ScramServer.ProcessClientFirstMessage`
-  under the address's budget and answered with the challenge; a client that drops
-  after it is released with `Abandon`. The proof goes to
-  `ProcessClientFinalMessage`; a verified one makes a token (`api.NewToken`), a
-  sign-in row with the token's hash, the device's name and a 30-day expiry, and
-  answers the server final with the token, or with the cookie for a page.
+  under the address's budget, with the name as the client spelled it, and
+  answered with the challenge; an exchange whose proof never comes is released
+  with `Abandon` after the handshake timeout. The proof goes to
+  `ProcessClientFinalMessage`; a verified one, for an account still enabled,
+  makes a token (`api.NewToken`), a sign-in row with the token's hash, the
+  device's name and a 30-day expiry, and answers the server final with the
+  token, or with the cookie for a page.
 - **Introspection.** The router posts a token; the store finds the live sign-in
   of an enabled account by its hash, or none; past half the lifetime the row's
   `last_seen_at` and `expires_at` slide forward and the answer says `renewed`.
@@ -117,8 +136,12 @@ beyond the standard library is `lixenwraith/auth`, for `Credential`,
   presented one marked, so a device list is what the player revokes from.
 - **The operator's reset.** The CLI derives a new credential on the server, the
   one place Argon2 runs here, replaces the verifier and deletes every sign-in.
-  Disabling an account keeps its rows and refuses its sign-ins; deleting it
-  cascades.
+  Disabling an account keeps its rows and refuses its sign-ins at the proof
+  and at introspection; deleting it cascades. A verifier added or reset
+  reaches the running service at its next start, which loads them all and
+  refuses one derived under another profile than its flags name.
+- **The sweep.** Once an hour the service deletes the sign-ins past their
+  expiry; no lookup finds them before that, so this is housekeeping.
 
 ## 3. Posture
 
@@ -149,7 +172,8 @@ configured outside this repository):
   `deploy/identity.service`: the state directory for the decoy key, the
   database password as a systemd credential, two loopback listeners, under 256
   MiB. Its update needs no empty fleet, since its restart pauses only sign-ins
-  and account tickets.
+  and account tickets. A deployment without a jail keeps the store file in the
+  same state directory (D1a).
 - **The jail** runs PostgreSQL 18 on the host's internal network with the
   server's certificate, `hostssl` and SCRAM-SHA-256 for the role from the node's
   address alone, provisioned by `schema/setup.sql`, migrated by the numbered
@@ -158,10 +182,12 @@ configured outside this repository):
   second once per account ticket, and mints from a page's cookie only on a
   request whose `Origin` is its own.
 
-## 5. Not implemented
+## 5. What remains
 
-The scaffold holds the shape and the rules, not the service. In
-[todo.md](todo.md), in order: the `pg` wire protocol and its integration test
-against PostgreSQL 18; the handlers behind the routes and the per-address table;
-introspection's lookup and renewal; the operator CLI; the expired sign-in
-sweep; the deployment's update helper and the budget's readings.
+The service is built as designed: the `pg` client, the handlers and their
+budgets, introspection, the operator's commands, the sweep and the deployment's
+updater, each tested against a real PostgreSQL. [todo.md](todo.md) holds what
+is left, in order: the readings §9 asks for (RSS at 10,000 verifiers, the
+launch-day introspection rate); the jail's address as an `IPAddressAllow`
+drop-in once the deployment names it; a way for an operator's add or reset to
+reach the running service without a restart.

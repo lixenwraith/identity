@@ -70,8 +70,12 @@ nightly `pg_dump`. Addresses here are placeholders.
    jail# su -m postgres -c "psql -X -1 -d identity -c 'SET ROLE identity_owner' -f schema/001_init.sql"    # split mode
    ```
 
-   The service checks the version at start and refuses any other; an upgrade
-   that adds a migration applies it the same way before the new binary starts.
+   In owner mode the node may migrate instead, with the role's own connection:
+   `identity migrate -db-url ... -db-password-file ... -db-ca-file ...`, which
+   `deploy/update-identity.sh` runs before each update and which applies
+   nothing when the schema is current. The service checks the version at start
+   and refuses any other; in split mode an upgrade that adds a migration is
+   applied here, as the owner, before the update.
 
 ## Verifying
 

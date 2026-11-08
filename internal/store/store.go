@@ -1,7 +1,8 @@
-// Package store keeps accounts, their SCRAM verifiers and their sign-ins in
+// Package store keeps accounts, their SCRAM verifiers and their sign-ins: in
 // PostgreSQL through pg, one statement a method, in the schema the embedded
-// migrations describe. It holds no password and no token: the verifier a
-// device derived, and the SHA-256 of each token the device keeps.
+// migrations describe (PG), or in one JSON file for a deployment too small for
+// a database and for the tests (File). It holds no password and no token: the
+// verifier a device derived, and the SHA-256 of each token the device keeps.
 package store
 
 import (
@@ -13,6 +14,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/lixenwraith/identity/internal/pg"
@@ -103,6 +105,12 @@ type SignIn struct {
 	ExpiresAt  time.Time
 }
 
+// Now is the store's clock: UTC to the microsecond, which is what timestamptz
+// keeps, so a time written and read back compares equal.
+func Now() time.Time {
+	return time.Now().UTC().Truncate(time.Microsecond)
+}
+
 // HashToken is what a sign-in row keeps of a token, so a copy of the table
 // signs nobody in; a lookup hashes the presented token the same way.
 func HashToken(token string) []byte {
@@ -129,13 +137,46 @@ func NewID() string {
 	return string(out[:])
 }
 
-// Store is the service's view of its database, safe for concurrent use.
-type Store struct {
+// Store is what the service and the operator's commands need of a store,
+// whichever holds it; ErrNotFound, ErrNameTaken and ErrAccountsFull mean the
+// same from each.
+type Store interface {
+	// Migrate brings the store to the binary's version and reports the versions
+	// before and after; CheckSchema holds it to that version without touching it.
+	Migrate(ctx context.Context) (from, to int, err error)
+	CheckSchema(ctx context.Context) error
+	CreateAccount(ctx context.Context, name string, v Verifier, maxAccounts int) (Account, error)
+	SetVerifier(ctx context.Context, v Verifier) error
+	Verifiers(ctx context.Context) ([]Verifier, error)
+	AccountByID(ctx context.Context, id string) (Account, error)
+	AccountByName(ctx context.Context, name string) (Account, error)
+	Accounts(ctx context.Context) ([]Account, error)
+	SetDisabled(ctx context.Context, id string, disabled bool) error
+	DeleteAccount(ctx context.Context, id string) error
+	CreateSignIn(ctx context.Context, in SignIn) error
+	SignInByToken(ctx context.Context, tokenHash []byte) (SignIn, Account, error)
+	RenewSignIn(ctx context.Context, id string, now time.Time) error
+	SignIns(ctx context.Context, accountID string) ([]SignIn, error)
+	DeleteSignIn(ctx context.Context, accountID, id string) error
+	DeleteSignInByToken(ctx context.Context, tokenHash []byte) error
+	DeleteSignIns(ctx context.Context, accountID string) (int64, error)
+	DeleteExpiredSignIns(ctx context.Context) (int64, error)
+}
+
+var (
+	_ Store = (*PG)(nil)
+	_ Store = (*File)(nil)
+)
+
+type syncMutex = sync.Mutex
+
+// PG is the store in PostgreSQL, safe for concurrent use.
+type PG struct {
 	db *pg.Pool
 }
 
-func New(db *pg.Pool) *Store {
-	return &Store{db: db}
+func NewPG(db *pg.Pool) *PG {
+	return &PG{db: db}
 }
 
 type querier interface {
@@ -148,7 +189,7 @@ const accountColumns = `account_id, name, created_at, disabled_at`
 // CreateAccount makes an account with its verifier under the deployment's cap;
 // 0 is no cap. The count and the insert sit under one advisory lock, so two
 // registrations cannot both pass the last free place.
-func (s *Store) CreateAccount(ctx context.Context, name string, v Verifier, maxAccounts int) (Account, error) {
+func (s *PG) CreateAccount(ctx context.Context, name string, v Verifier, maxAccounts int) (Account, error) {
 	name, err := NormalizeName(name)
 	if err != nil {
 		return Account{}, err
@@ -177,7 +218,7 @@ func (s *Store) CreateAccount(ctx context.Context, name string, v Verifier, maxA
 			return Account{}, ErrAccountsFull
 		}
 	}
-	a := Account{ID: NewID(), Name: name, CreatedAt: time.Now().UTC()}
+	a := Account{ID: NewID(), Name: name, CreatedAt: Now()}
 	if _, err := tx.Exec(ctx, `INSERT INTO accounts (account_id, name, created_at) VALUES ($1, $2, $3)`,
 		a.ID, a.Name, a.CreatedAt); err != nil {
 		if pg.IsUniqueViolation(err) {
@@ -206,14 +247,14 @@ func putVerifier(ctx context.Context, q querier, v Verifier) error {
 
 // SetVerifier replaces an account's credential: the operator's reset, the one
 // place a password is derived on the server.
-func (s *Store) SetVerifier(ctx context.Context, v Verifier) error {
+func (s *PG) SetVerifier(ctx context.Context, v Verifier) error {
 	return putVerifier(ctx, s.db, v)
 }
 
 // Verifiers lists every enabled account's credential, what the SCRAM server
 // is loaded with at start; a disabled account is unknown to it, so its
 // sign-in fails as a wrong password does.
-func (s *Store) Verifiers(ctx context.Context) ([]Verifier, error) {
+func (s *PG) Verifiers(ctx context.Context) ([]Verifier, error) {
 	rows, err := s.db.Query(ctx, `SELECT a.name, v.account_id, v.salt, v.argon_time, v.argon_memory,
 			v.argon_threads, v.stored_key, v.server_key
 		FROM verifiers v JOIN accounts a USING (account_id)
@@ -234,11 +275,11 @@ func (s *Store) Verifiers(ctx context.Context) ([]Verifier, error) {
 	return list, rows.Err()
 }
 
-func (s *Store) AccountByID(ctx context.Context, id string) (Account, error) {
+func (s *PG) AccountByID(ctx context.Context, id string) (Account, error) {
 	return s.account(ctx, `account_id = $1`, id)
 }
 
-func (s *Store) AccountByName(ctx context.Context, name string) (Account, error) {
+func (s *PG) AccountByName(ctx context.Context, name string) (Account, error) {
 	name, err := NormalizeName(name)
 	if err != nil {
 		return Account{}, ErrNotFound
@@ -246,7 +287,7 @@ func (s *Store) AccountByName(ctx context.Context, name string) (Account, error)
 	return s.account(ctx, `name = $1`, name)
 }
 
-func (s *Store) account(ctx context.Context, where string, arg any) (Account, error) {
+func (s *PG) account(ctx context.Context, where string, arg any) (Account, error) {
 	var a Account
 	err := s.db.QueryRow(ctx, `SELECT `+accountColumns+` FROM accounts WHERE `+where, arg).
 		Scan(&a.ID, &a.Name, &a.CreatedAt, &a.DisabledAt)
@@ -257,7 +298,7 @@ func (s *Store) account(ctx context.Context, where string, arg any) (Account, er
 }
 
 // Accounts lists every account, oldest first: the operator's view.
-func (s *Store) Accounts(ctx context.Context) ([]Account, error) {
+func (s *PG) Accounts(ctx context.Context) ([]Account, error) {
 	rows, err := s.db.Query(ctx, `SELECT `+accountColumns+` FROM accounts ORDER BY created_at, account_id`)
 	if err != nil {
 		return nil, err
@@ -276,20 +317,20 @@ func (s *Store) Accounts(ctx context.Context) ([]Account, error) {
 
 // SetDisabled closes or reopens an account. Disabling leaves its sign-ins in
 // place and useless, since a lookup joins an enabled account alone.
-func (s *Store) SetDisabled(ctx context.Context, id string, disabled bool) error {
+func (s *PG) SetDisabled(ctx context.Context, id string, disabled bool) error {
 	var at *time.Time
 	if disabled {
-		now := time.Now().UTC()
+		now := Now()
 		at = &now
 	}
 	return s.one(ctx, `UPDATE accounts SET disabled_at = $2 WHERE account_id = $1`, id, at)
 }
 
-func (s *Store) DeleteAccount(ctx context.Context, id string) error {
+func (s *PG) DeleteAccount(ctx context.Context, id string) error {
 	return s.one(ctx, `DELETE FROM accounts WHERE account_id = $1`, id)
 }
 
-func (s *Store) CreateSignIn(ctx context.Context, in SignIn) error {
+func (s *PG) CreateSignIn(ctx context.Context, in SignIn) error {
 	_, err := s.db.Exec(ctx, `INSERT INTO sign_ins
 			(sign_in_id, account_id, token_hash, device, created_at, last_seen_at, expires_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7)`,
@@ -300,7 +341,7 @@ func (s *Store) CreateSignIn(ctx context.Context, in SignIn) error {
 // SignInByToken answers the router's question and every signed-in request:
 // the live sign-in a token names and its enabled account, or ErrNotFound for
 // an unknown, expired or disabled one alike.
-func (s *Store) SignInByToken(ctx context.Context, tokenHash []byte) (SignIn, Account, error) {
+func (s *PG) SignInByToken(ctx context.Context, tokenHash []byte) (SignIn, Account, error) {
 	var in SignIn
 	var a Account
 	err := s.db.QueryRow(ctx, `SELECT s.sign_in_id, s.account_id, s.device, s.created_at, s.last_seen_at, s.expires_at,
@@ -318,12 +359,12 @@ func (s *Store) SignInByToken(ctx context.Context, tokenHash []byte) (SignIn, Ac
 
 // RenewSignIn slides a sign-in past half its life: last seen now, expiring a
 // lifetime from now.
-func (s *Store) RenewSignIn(ctx context.Context, id string, now time.Time) error {
+func (s *PG) RenewSignIn(ctx context.Context, id string, now time.Time) error {
 	return s.one(ctx, `UPDATE sign_ins SET last_seen_at = $2, expires_at = $3 WHERE sign_in_id = $1`,
 		id, now, now.Add(SignInLifetime))
 }
 
-func (s *Store) SignIns(ctx context.Context, accountID string) ([]SignIn, error) {
+func (s *PG) SignIns(ctx context.Context, accountID string) ([]SignIn, error) {
 	rows, err := s.db.Query(ctx, `SELECT sign_in_id, account_id, token_hash, device, created_at, last_seen_at, expires_at
 		FROM sign_ins WHERE account_id = $1 AND expires_at > now() ORDER BY created_at, sign_in_id`, accountID)
 	if err != nil {
@@ -343,28 +384,28 @@ func (s *Store) SignIns(ctx context.Context, accountID string) ([]SignIn, error)
 
 // DeleteSignIn revokes one of an account's sign-ins; the account is part of
 // the key, so a signed-in device revokes its own account's alone.
-func (s *Store) DeleteSignIn(ctx context.Context, accountID, id string) error {
+func (s *PG) DeleteSignIn(ctx context.Context, accountID, id string) error {
 	return s.one(ctx, `DELETE FROM sign_ins WHERE account_id = $1 AND sign_in_id = $2`, accountID, id)
 }
 
 // DeleteSignInByToken is a logout: the presented token's sign-in goes.
-func (s *Store) DeleteSignInByToken(ctx context.Context, tokenHash []byte) error {
+func (s *PG) DeleteSignInByToken(ctx context.Context, tokenHash []byte) error {
 	return s.one(ctx, `DELETE FROM sign_ins WHERE token_hash = $1`, tokenHash)
 }
 
 // DeleteSignIns revokes every sign-in of an account, as a reset does.
-func (s *Store) DeleteSignIns(ctx context.Context, accountID string) (int64, error) {
+func (s *PG) DeleteSignIns(ctx context.Context, accountID string) (int64, error) {
 	res, err := s.db.Exec(ctx, `DELETE FROM sign_ins WHERE account_id = $1`, accountID)
 	return res.RowsAffected, err
 }
 
-func (s *Store) DeleteExpiredSignIns(ctx context.Context) (int64, error) {
+func (s *PG) DeleteExpiredSignIns(ctx context.Context) (int64, error) {
 	res, err := s.db.Exec(ctx, `DELETE FROM sign_ins WHERE expires_at <= now()`)
 	return res.RowsAffected, err
 }
 
 // one runs a statement that must touch one row, and reports none as ErrNotFound.
-func (s *Store) one(ctx context.Context, sql string, args ...any) error {
+func (s *PG) one(ctx context.Context, sql string, args ...any) error {
 	res, err := s.db.Exec(ctx, sql, args...)
 	if err != nil {
 		return err
