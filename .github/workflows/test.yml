@@ -18,10 +18,6 @@ jobs:
           --health-interval 2s
           --health-timeout 5s
           --health-retries 30
-    env:
-      IDENTITY_TEST_DB_URL: postgres://identity@localhost:5432/identity?sslmode=verify-full
-      IDENTITY_TEST_DB_CA: ${{ runner.temp }}/pg/server.crt
-      IDENTITY_TEST_DB_PASSWORD_FILE: ${{ runner.temp }}/pg/db-password
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-go@v6
@@ -54,9 +50,13 @@ jobs:
       - run: go vet ./...
       - name: gofmt -l
         run: out=$(gofmt -l .); [ -z "$out" ] || { echo "$out"; exit 1; }
+      # A job's env has no runner context; a step's has.
       - run: go test -timeout 120s -race ./...
         env:
           GORACE: halt_on_error=1
+          IDENTITY_TEST_DB_URL: postgres://identity@localhost:5432/identity?sslmode=verify-full
+          IDENTITY_TEST_DB_CA: ${{ runner.temp }}/pg/server.crt
+          IDENTITY_TEST_DB_PASSWORD_FILE: ${{ runner.temp }}/pg/db-password
       - run: CGO_ENABLED=0 go build -o /dev/null ./cmd/identity
       - run: CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o /dev/null ./cmd/identity
       - run: bash -n deploy/backup.sh && sh -n deploy/update-identity.sh
