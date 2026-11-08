@@ -47,7 +47,7 @@ help:
 	@echo "  vet          go vet ./..."
 	@echo "  fmt-check    gofmt -l on every Go file, with the toolchain's own gofmt"
 	@echo "  fmt          gofmt -w the same files"
-	@echo "  verify       vet, fmt-check, test, the static and linux/arm64 builds, bash -n on deploy/backup.sh"
+	@echo "  verify       vet, fmt-check, test, the static and linux/arm64 builds, a syntax check of the deploy scripts"
 	@echo ""
 	@echo "Variables: GO=$(GO) GO_BUILDFLAGS, GO_LDFLAGS (extra go build and linker flags)"
 
@@ -85,6 +85,7 @@ verify: vet fmt-check test
 	CGO_ENABLED=0 $(GO) build -o /dev/null $(SRC)
 	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 $(GO) build -o /dev/null $(SRC)
 	bash -n deploy/backup.sh
+	sh -n deploy/update-identity.sh
 
 clean:
 	rm -rf $(BIN_DIR)

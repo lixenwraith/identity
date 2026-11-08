@@ -2,8 +2,7 @@
 
 What the service answers, on two loopback listeners. The router forwards
 `/vif/api/auth/` to the first byte for byte and asks the second itself; neither
-is reachable from outside the node. In the scaffold every route bounds and
-decodes its request as described and then answers `501 not_implemented`.
+is reachable from outside the node.
 
 ## Common
 
@@ -36,8 +35,8 @@ no KDF.
 ```
 
 - `201` `{"id": "…", "name": "alice"}`. The name is stored in lowercase: 1 to 32
-  of `a-z`, `0-9`, `_` and `-`, starting with a letter; it must equal the
-  credential's `username`.
+  of `a-z`, `0-9`, `_` and `-`, starting with a letter; the credential's
+  `username` must be that lowercase name, and a sign-in spells it the same way.
 - `400 invalid_name`, `400 invalid_credential` (not the profile, a malformed
   key), `409 name_taken`, `503 accounts_full` at `-max-accounts`.
 
@@ -68,7 +67,8 @@ The proof, with the device's name and, for a page, `"session": "cookie"`:
   the `vif_sign_in` cookie instead and the body has no `token`.
 - `401 unauthorized` for a wrong proof, an unknown name, an expired challenge
   or a disabled account alike; `400 malformed_request` for a body with both
-  steps or neither, or a device name past 64 characters.
+  steps or neither, a device name absent or past 64 characters, or a `session`
+  other than `cookie`.
 
 ## `POST /vif/api/auth/logout`
 

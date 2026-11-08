@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -178,7 +179,7 @@ func TestABudgetSpendsRefillsAndRefunds(t *testing.T) {
 	}
 	full := newBudget(1, time.Minute)
 	for i := range maxBudgetClients {
-		full.take("10.0."+string(rune('a'+i%26))+"."+strings.Repeat("x", i/26+1), now)
+		full.take("client-"+strconv.Itoa(i), now)
 	}
 	if wait := full.take("203.0.113.9", now); wait == 0 {
 		t.Fatal("a full table admitted a new address")

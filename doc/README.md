@@ -5,7 +5,7 @@ router, how to build and run it and where it is deployed.
 
 - [Design](design.md): the service's decisions and why, its packages and their
   dependencies, each flow, the threats and what meets each, the deployment's
-  roles, and what the scaffold leaves out.
+  roles, and what remains.
 - [API](api.md): every route, request and answer, the error form, the limits.
 - [Agent notes](agent-notes.md): what working here teaches that no document
   states; read it before starting.

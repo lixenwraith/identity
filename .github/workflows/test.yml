@@ -5,18 +5,58 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: superuser-test-password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
+    env:
+      IDENTITY_TEST_DB_URL: postgres://identity@localhost:5432/identity?sslmode=verify-full
+      IDENTITY_TEST_DB_CA: ${{ runner.temp }}/pg/server.crt
+      IDENTITY_TEST_DB_PASSWORD_FILE: ${{ runner.temp }}/pg/db-password
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
+      # The service container starts without TLS, and the client speaks nothing
+      # else: a certificate for localhost is copied in, ssl turned on with a
+      # reload, and the role and database made as setup.sql makes them.
+      - name: Turn on TLS in PostgreSQL and provision the identity database
+        env:
+          PG: ${{ job.services.postgres.id }}
+        run: |
+          set -eu
+          dir=$RUNNER_TEMP/pg
+          mkdir -p "$dir"
+          openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 2 \
+            -subj '/CN=localhost' -addext 'subjectAltName=DNS:localhost,IP:127.0.0.1' \
+            -keyout "$dir/server.key" -out "$dir/server.crt"
+          docker cp "$dir/server.crt" "$PG:/var/lib/postgresql/server.crt"
+          docker cp "$dir/server.key" "$PG:/var/lib/postgresql/server.key"
+          docker exec "$PG" sh -c 'chown postgres:postgres /var/lib/postgresql/server.crt /var/lib/postgresql/server.key && chmod 600 /var/lib/postgresql/server.key'
+          docker exec "$PG" psql -U postgres -X -v ON_ERROR_STOP=1 \
+            -c "ALTER SYSTEM SET ssl = on" \
+            -c "ALTER SYSTEM SET ssl_cert_file = '/var/lib/postgresql/server.crt'" \
+            -c "ALTER SYSTEM SET ssl_key_file = '/var/lib/postgresql/server.key'" \
+            -c "SELECT pg_reload_conf()"
+          (umask 077; printf 'identity-test-password\n' > "$dir/db-password")
+          docker exec -i "$PG" psql -U postgres -X -v password="'identity-test-password'" -f - < schema/setup.sql
+          docker exec "$PG" psql -U postgres -X -Atc 'SHOW ssl' | grep -x on
       - run: go vet ./...
       - name: gofmt -l
         run: out=$(gofmt -l .); [ -z "$out" ] || { echo "$out"; exit 1; }
-      - run: go test -timeout 60s -race ./...
+      - run: go test -timeout 120s -race ./...
         env:
           GORACE: halt_on_error=1
       - run: CGO_ENABLED=0 go build -o /dev/null ./cmd/identity
       - run: CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o /dev/null ./cmd/identity
-      - run: bash -n deploy/backup.sh
+      - run: bash -n deploy/backup.sh && sh -n deploy/update-identity.sh

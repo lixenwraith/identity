@@ -1,7 +1,7 @@
 <p align="center">
   <a href="https://golang.org"><img src="https://img.shields.io/badge/Go-1.27.3-00ADD8?style=flat&logo=go" alt="Go"></a>
   <a href="https://opensource.org/licenses/BSD-3-Clause"><img src="https://img.shields.io/badge/License-BSD_3--Clause-blue.svg" alt="License"></a>
-  <img src="https://img.shields.io/badge/Status-scaffold-lightgrey" alt="Status: scaffold">
+  <img src="https://img.shields.io/badge/Status-v0.2.0-blue" alt="Status: v0.2.0">
 </p>
 
 # identity
@@ -13,12 +13,12 @@ generic, so [chess](https://github.com/lixenwraith/chess) can adopt it as its
 account service in a session of its own, and the game binary never names a
 database driver.
 
-**Status: a scaffold.** The repository holds the module, the packages with
-their exported surface, the schema, the systemd unit, the backup script and the
-documents. The HTTP routes answer `501 not_implemented` after bounding and
-decoding their requests, the PostgreSQL client's wire protocol is not written,
-and `identity` starts up to the point of connecting. [doc/todo.md](doc/todo.md)
-lists what follows, in order.
+**Status: v0.2.0, the service as designed.** The routes, the PostgreSQL client
+on the standard library, the operator's commands, the hourly sweep and the
+deployment's updater, each tested against a real PostgreSQL.
+[doc/todo.md](doc/todo.md) lists what remains: the budget's readings, the
+jail's address filter, and an operator's change reaching the running service
+without a restart.
 
 ## How it fits
 
@@ -73,6 +73,20 @@ bin/identity \
     -db-ca-file /etc/identity/db-ca.crt
 ```
 
+The operator's commands take the same database flags, after the command:
+`identity migrate` applies the embedded migrations; `identity account add
+<name>` reads a password from the terminal, or from standard input when it is
+not one, and derives the credential on the server under the configured
+profile; `account disable|enable|delete <name>`, `account reset <name>` (a new
+credential, every sign-in deleted) and `account list`. An account added or
+reset is loaded by the service at its next start.
+
+The tests that need a database take it from `IDENTITY_TEST_DB_URL` (the
+service's URL form), `IDENTITY_TEST_DB_CA` (the server's certificate) and
+`IDENTITY_TEST_DB_PASSWORD_FILE` (the role's password, a 0600 file), and skip
+without them; CI runs them against PostgreSQL 18 with TLS turned on
+(`.github/workflows/test.yml` sets the server up).
+
 The flags, each with its default in `-h`:
 
 - `-listen` (`127.0.0.1:9082`): the `/vif/api/auth/` listener the router
@@ -118,7 +132,10 @@ placeholders. [deploy/README.md](deploy/README.md) says where each file lands.
   `deploy/identity.service`: `ProtectSystem=strict`, a `StateDirectory` for the
   decoy key, the database password loaded as a systemd credential, two loopback
   listeners, no capability. `deploy/identity.env` holds its settings and no
-  secret.
+  secret. `deploy/update-identity.sh` builds from the checkout, migrates the
+  schema, keeps the previous binary, settings and unit, restarts and probes
+  both listeners, restoring the previous service if the new one does not
+  answer.
 - The jail runs PostgreSQL 18: the database, schema and role `identity`,
   `hostssl` and SCRAM-SHA-256 from the node's address alone, the server's
   certificate copied to the node. [schema/README.md](schema/README.md) is the
@@ -132,7 +149,7 @@ placeholders. [deploy/README.md](deploy/README.md) says where each file lands.
 - [API](doc/api.md): every route, request and answer.
 - [Agent notes](doc/agent-notes.md): what working on this repository teaches
   that no document states.
-- [To do](doc/todo.md): what the scaffold leaves, in order.
+- [To do](doc/todo.md): what remains, in order.
 - [AGENTS.md](AGENTS.md): the working rules.
 
 The decisions this service serves are vif's, in

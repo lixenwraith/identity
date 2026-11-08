@@ -22,34 +22,53 @@ in. The database side is [schema/README.md](../schema/README.md).
   hardened unit with `StateDirectory=identity` (the decoy key, 0600, made at
   first start), `ProtectSystem=strict`, `PrivateTmp`, `NoNewPrivileges`, no
   capability, 256 MiB.
-- The binary: `/usr/local/bin/identity`, root 0755, from `make release`.
+- The binary: `/usr/local/bin/identity`, root 0755, from `make release`;
+  `update-identity.sh` installs it, with the unit and the sysusers file, and
+  keeps the previous binary as `/usr/local/libexec/identity.previous`, the
+  previous settings and unit as `.previous` beside the installed ones.
 - `backup.sh`: on the jail, `/usr/local/sbin/identity-backup`, root 0555; bash 5.
 
 ## The node
 
+The settings, the password and the certificate are placed by hand, once; the
+binary, the unit and the system user come from `update-identity.sh`, on the
+first install and on every update. The jail's database is provisioned first
+([schema/README.md](../schema/README.md)).
+
 ```sh
-node$ make release
-node# install -o root -g root -m 0755 bin/identity /usr/local/bin/identity
-node# install -o root -g root -m 0644 deploy/identity.sysusers /etc/sysusers.d/identity.conf && systemd-sysusers
+node# systemd-sysusers deploy/identity.sysusers
 node# install -d -o root -g identity -m 0750 /etc/identity
 node# install -o root -g identity -m 0640 deploy/identity.env /etc/identity/identity.env    # then fill in <jail-address>
 node# install -o root -g root -m 0600 /dev/null /etc/identity/db-password                    # then paste the role's password
 node# install -o root -g root -m 0644 server.crt /etc/identity/db-ca.crt
-node# install -o root -g root -m 0644 deploy/identity.service /etc/systemd/system/identity.service
-node# systemctl daemon-reload && systemctl enable --now identity
-node$ curl -sS -X POST -H 'Content-Type: application/json' -d '{"token":"x"}' http://127.0.0.1:9083/introspect
+node$ deploy/update-identity.sh
 ```
 
-The last line answers in the error form (`501 not_implemented` from the
-scaffold); `journalctl -u identity` holds the JSON log, which names no
-credential. Where the router forwards `/vif/api/auth/` to and where it asks
-its question are the router's settings (vif's `deploy/guest/vif-router.env`):
-`IDENTITY_LISTEN` and `IDENTITY_INTROSPECT_LISTEN` here.
+The script refuses a worktree that differs from HEAD, builds `make release`,
+runs `identity migrate` with the node's own role (nothing when the schema is
+current; in split mode the jail's owner migrates first and this confirms the
+version), installs the sysusers file, the binary, the settings rendered from
+`deploy/identity.env` with the installed `IDENTITY_DB_URL` carried over, and
+the unit, then starts the service and probes it: a route outside the table
+answers `404` and `POST /introspect` with a random token answers
+`{"account":null}`. On an update it stops the service first and keeps the
+previous binary, settings and unit, restored if the new service does not
+answer; the restart pauses sign-ins and account tickets alone, so it needs no
+empty fleet. `--render` prints the settings it would install.
+`journalctl -u identity` holds the JSON log, which names no credential. Where
+the router forwards `/vif/api/auth/` to and where it asks its question are the
+router's settings (vif's `deploy/guest/vif-router.env`): `IDENTITY_LISTEN` and
+`IDENTITY_INTROSPECT_LISTEN` here.
 
-An update installs the new binary and restarts the unit; the service's restart
-pauses sign-ins and account tickets alone, so it needs no empty fleet. Keep
-the previous binary as `/usr/local/bin/identity.previous` and restore it the
-same way if the new one does not come up.
+The operator's commands run on the node as root with the installed settings,
+the password read from the terminal:
+
+```sh
+node# . /etc/identity/identity.env && identity account add alice -db-url "$IDENTITY_DB_URL" -db-password-file /etc/identity/db-password -db-ca-file "$IDENTITY_DB_CA_FILE"
+node# systemctl restart identity    # an account added or reset is loaded at the next start
+```
+
+`account list`, `disable`, `enable`, `reset` and `delete` take the same flags.
 
 ## The jail
 
