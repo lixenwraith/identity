@@ -1,7 +1,8 @@
 // Command identity is the account service for vif: registration, sign-in by
 // Argon2-SCRAM, sign-ins per device and their revocation on /vif/api/auth/,
 // and on a second loopback listener the router's one question, which account
-// a token names. Accounts live in PostgreSQL as verifiers, never passwords.
+// a token names. Accounts live in PostgreSQL as verifiers, never passwords;
+// identity migrate and identity account are the operator's commands on them.
 package main
 
 import (
@@ -35,9 +36,23 @@ const (
 	decoyKeyBytes = 32
 	openTimeout   = 15 * time.Second
 	stopTimeout   = 15 * time.Second
+	sweepInterval = time.Hour
 )
 
 func main() {
+	if len(os.Args) > 1 && (os.Args[1] == "migrate" || os.Args[1] == "account") {
+		err := cli(context.Background(), os.Args[1:], os.Stdin, os.Stdout, os.Stderr)
+		switch {
+		case errors.Is(err, flag.ErrHelp):
+			os.Exit(0)
+		case errors.Is(err, errUsage):
+			os.Exit(2)
+		case err != nil:
+			fmt.Fprintf(os.Stderr, "%s: %v\n", config.Name, err)
+			os.Exit(1)
+		}
+		return
+	}
 	cfg, err := config.Parse(os.Args[1:], os.Stderr)
 	switch {
 	case errors.Is(err, flag.ErrHelp):
@@ -56,31 +71,40 @@ func main() {
 	}
 }
 
-func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
-	ctx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
-
+// database is the pool's configuration from the flags: the password read from
+// its file, the server verified against the CA file or the system roots.
+func database(cfg config.Config) (pg.Config, error) {
 	dbCfg, err := pg.ParseURL(cfg.DatabaseURL)
 	if err != nil {
-		return err
+		return pg.Config{}, err
 	}
 	password, err := config.ReadSecretFile(cfg.DBPasswordFile)
 	if err != nil {
-		return fmt.Errorf("database password: %w", err)
+		return pg.Config{}, fmt.Errorf("database password: %w", err)
 	}
 	dbCfg.Password = string(password)
 	clear(password)
 	var ca []byte
 	if cfg.DBCAFile != "" {
 		if ca, err = os.ReadFile(cfg.DBCAFile); err != nil {
-			return fmt.Errorf("database CA: %w", err)
+			return pg.Config{}, fmt.Errorf("database CA: %w", err)
 		}
 	}
 	if dbCfg.TLS, err = pg.TLSConfig(ca, dbCfg.Host); err != nil {
-		return err
+		return pg.Config{}, err
 	}
 	dbCfg.MaxConns = cfg.DBPool
+	return dbCfg, nil
+}
 
+func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
+	ctx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	dbCfg, err := database(cfg)
+	if err != nil {
+		return err
+	}
 	key, err := decoyKey(cfg.StateDir)
 	if err != nil {
 		return err
@@ -104,16 +128,22 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 		return err
 	}
 	// Every verifier is loaded before a request is answered, so an unknown name
-	// and a known one take the same path from the first sign-in on.
+	// and a known one take the same path from the first sign-in on; one derived
+	// under another profile would split the population, so it stops the start.
 	verifiers, err := st.Verifiers(ctx)
 	if err != nil {
 		return fmt.Errorf("load verifiers: %w", err)
 	}
 	for _, v := range verifiers {
+		if k := cfg.KDF; v.ArgonMemory != k.Memory || v.ArgonTime != k.Time || v.ArgonThreads != k.Threads {
+			return fmt.Errorf("verifier of %q was derived under another KDF profile (%d KiB, %d passes, %d lanes); the service runs one",
+				v.Name, v.ArgonMemory, v.ArgonTime, v.ArgonThreads)
+		}
 		if err := scram.AddCredential(v.Credential()); err != nil {
 			return fmt.Errorf("verifier of %q: %w", v.Name, err)
 		}
 	}
+	go sweep(ctx, st, logger)
 
 	handler := api.New(api.Options{
 		Store: st, Scram: scram, KDF: cfg.KDF, MaxAccounts: cfg.MaxAccounts,
@@ -157,6 +187,29 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 		}
 	}
 	return nil
+}
+
+// sweep deletes expired sign-ins once an hour: no lookup finds them, so this
+// is housekeeping, and the count at info says how the table breathes.
+func sweep(ctx context.Context, st *store.Store, logger *slog.Logger) {
+	ticker := time.NewTicker(sweepInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		sweepCtx, cancel := context.WithTimeout(ctx, time.Minute)
+		n, err := st.DeleteExpiredSignIns(sweepCtx)
+		cancel()
+		switch {
+		case err != nil:
+			logger.Error("sweep of expired sign-ins failed", "error", err)
+		case n > 0:
+			logger.Info("expired sign-ins deleted", "count", n)
+		}
+	}
 }
 
 func newServer(ctx context.Context, handler http.Handler, timeout time.Duration) *http.Server {

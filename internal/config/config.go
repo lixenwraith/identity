@@ -63,8 +63,10 @@ func Parse(args []string, output io.Writer) (Config, error) {
 	set := flag.NewFlagSet(Name, flag.ContinueOnError)
 	set.SetOutput(output)
 	set.Usage = func() {
-		fmt.Fprintf(output, "Usage: %s [flags]\n\nThe account service: /vif/api/auth/ for the router to forward,\n"+
-			"and the router's introspection, both on loopback. Accounts live in PostgreSQL.\n\nFlags:\n", Name)
+		fmt.Fprintf(output, "Usage: %s [flags]\n       %s migrate [flags]\n       %s account add|disable|enable|reset|list|delete [<name>] [flags]\n\n"+
+			"The account service: /vif/api/auth/ for the router to forward, and the router's\n"+
+			"introspection, both on loopback. Accounts live in PostgreSQL; migrate and account\n"+
+			"are the operator's commands on them, with the same database flags.\n\nFlags:\n", Name, Name, Name)
 		set.PrintDefaults()
 	}
 	set.StringVar(&cfg.Listen, "listen", "127.0.0.1:9082", "the /vif/api/auth/ listener the router forwards to (loopback)")
