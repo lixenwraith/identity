@@ -1,9 +1,9 @@
 #!/bin/sh
 # Build and deploy identity from this checkout, with its settings from
-# deploy/identity.env and the node's IDENTITY_DB_URL carried over from the installed
-# file. The schema is migrated before the new binary starts; one known-good binary,
-# env and unit is kept as .previous and restored when the new service does not come
-# up. --render prints the env file it would install.
+# deploy/identity.env and the node's IDENTITY_DB_URL and IDENTITY_STORE_FILE carried
+# over from the installed file. A database is migrated before the new binary
+# starts; one known-good binary, env and unit is kept as .previous and restored when
+# the new service does not come up. --render prints the env file it would install.
 set -eu
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -28,17 +28,25 @@ backup_binary=/usr/local/libexec/identity.previous
 backup_env=/etc/identity/identity.env.previous
 backup_unit=/etc/systemd/system/identity.service.previous
 
-# The repository's settings plus the node's IDENTITY_DB_URL, which names the jail
-# and is filled in on the node alone, so the installed file carries it over.
+# The repository's settings plus the node's IDENTITY_DB_URL and IDENTITY_STORE_FILE,
+# which name the jail or the file and are filled in on the node alone, so the
+# installed file carries them over. A file store needs no jail.
+installed_value() {
+	sudo cat "$installed_env" | sed -n "s/^$1=//p" | tail -n 1
+}
 render_env() {
-	url_line=$(sudo cat "$installed_env" | grep '^IDENTITY_DB_URL=' | tail -n 1 || true)
-	case $url_line in
-		''|*'<jail-address>'*)
-			echo "$0: $installed_env names no jail in IDENTITY_DB_URL; fill it in first" >&2
-			return 1 ;;
-	esac
-	grep -v '^IDENTITY_DB_URL=' "$source_env"
-	printf '%s\n' "$url_line"
+	store_file=$(installed_value IDENTITY_STORE_FILE)
+	url=$(installed_value IDENTITY_DB_URL)
+	if [ -z "$store_file" ]; then
+		case $url in
+			''|*'<jail-address>'*)
+				echo "$0: $installed_env names no jail in IDENTITY_DB_URL and no IDENTITY_STORE_FILE; fill one in first" >&2
+				return 1 ;;
+		esac
+	fi
+	grep -v '^IDENTITY_DB_URL=\|^IDENTITY_STORE_FILE=' "$source_env"
+	printf 'IDENTITY_STORE_FILE=%s\n' "$store_file"
+	printf 'IDENTITY_DB_URL=%s\n' "$url"
 }
 if [ "$render_only" = true ]; then
 	render_env
@@ -51,11 +59,13 @@ if [ -n "$(git -C "$repo_root" status --porcelain)" ]; then
 	exit 1
 fi
 # /etc/identity is root:identity 0750, so an operator account cannot stat inside
-# it and an installed file would read as missing without sudo.
-for installed in "$installed_env" "$password_file"; do
-	sudo test -f "$installed" ||
-		{ echo "$0: missing installed file: $installed (deploy/README.md)" >&2; exit 1; }
-done
+# it and an installed file would read as missing without sudo. A file store has
+# no database password.
+sudo test -f "$installed_env" ||
+	{ echo "$0: missing installed file: $installed_env (deploy/README.md)" >&2; exit 1; }
+store_file=$(installed_value IDENTITY_STORE_FILE)
+[ -n "$store_file" ] || sudo test -f "$password_file" ||
+	{ echo "$0: missing installed file: $password_file (deploy/README.md)" >&2; exit 1; }
 for source in "$source_unit" "$source_env" "$source_sysusers"; do
 	[ -r "$source" ] || { echo "$0: missing source: $source" >&2; exit 1; }
 done
@@ -107,12 +117,15 @@ make -C "$repo_root" release
 
 # The schema the new binary expects, applied with the node's own role before it
 # starts: nothing when current; in split mode the jail's owner applies it first
-# (schema/README.md) and this confirms the version.
-db_url=$(sed -n 's/^IDENTITY_DB_URL=//p' "$stage_root/identity.env.next")
-db_ca=$(sed -n 's/^IDENTITY_DB_CA_FILE=//p' "$stage_root/identity.env.next")
-set -- migrate -db-url "$db_url" -db-password-file "$password_file"
-[ -z "$db_ca" ] || set -- "$@" -db-ca-file "$db_ca"
-sudo "$repo_root/bin/identity" "$@"
+# (schema/README.md) and this confirms the version. A file store is brought to
+# the binary's format by the service itself, as the identity user, at start.
+if [ -z "$store_file" ]; then
+	db_url=$(sed -n 's/^IDENTITY_DB_URL=//p' "$stage_root/identity.env.next")
+	db_ca=$(sed -n 's/^IDENTITY_DB_CA_FILE=//p' "$stage_root/identity.env.next")
+	set -- migrate -db-url "$db_url" -db-password-file "$password_file"
+	[ -z "$db_ca" ] || set -- "$@" -db-ca-file "$db_ca"
+	sudo "$repo_root/bin/identity" "$@"
+fi
 
 sudo install -o root -g root -m 0644 "$source_sysusers" "$installed_sysusers"
 sudo systemd-sysusers

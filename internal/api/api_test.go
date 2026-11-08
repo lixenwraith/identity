@@ -14,8 +14,8 @@ import (
 	"time"
 
 	"github.com/lixenwraith/identity/internal/config"
-	"github.com/lixenwraith/identity/internal/dbtest"
 	"github.com/lixenwraith/identity/internal/store"
+	"github.com/lixenwraith/identity/internal/storetest"
 
 	"github.com/lixenwraith/auth"
 )
@@ -201,22 +201,17 @@ func credential(t *testing.T, name string) *auth.Credential {
 	return cred
 }
 
-// service is the handler on a fresh database with a SCRAM server of its own,
+// service is the handler on a fresh store with a SCRAM server of its own,
 // and the client side of its routes.
 type service struct {
 	t     *testing.T
 	h     *Handler
-	store *store.Store
+	store store.Store
 }
 
 func newService(t *testing.T, maxAccounts int) *service {
 	t.Helper()
-	pool := dbtest.Pool(t)
-	dbtest.Reset(t, pool)
-	st := store.New(pool)
-	if _, _, err := st.Migrate(context.Background()); err != nil {
-		t.Fatal(err)
-	}
+	st := storetest.Open(t).Store
 	scram := auth.NewScramServer()
 	t.Cleanup(scram.Stop)
 	h := New(Options{

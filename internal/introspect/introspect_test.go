@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/lixenwraith/identity/internal/dbtest"
 	"github.com/lixenwraith/identity/internal/store"
+	"github.com/lixenwraith/identity/internal/storetest"
 
 	"github.com/lixenwraith/auth"
 )
@@ -63,13 +63,8 @@ func TestTheOneQuestionIsAPostOfAToken(t *testing.T) {
 // life; an unknown, expired or revoked token, or a disabled account, names
 // none, and never with an error status.
 func TestATokenNamesALiveEnabledAccountOrNone(t *testing.T) {
-	pool := dbtest.Pool(t)
-	dbtest.Reset(t, pool)
-	st := store.New(pool)
+	st := storetest.Open(t).Store
 	ctx := context.Background()
-	if _, _, err := st.Migrate(ctx); err != nil {
-		t.Fatal(err)
-	}
 	h := New(st, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	cred, err := auth.NewCredential("alice", "a-long-example-password", auth.WithMemory(8*1024), auth.WithTime(1))
 	if err != nil {

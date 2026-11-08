@@ -19,6 +19,17 @@ each with the alternative it passed over. What remains is §5 and
   instead (`verify-full` is the only mode), and sends the password as given
   without SASLprep, so the role's password is printable ASCII, which `openssl
   rand -base64` produces. The SCRAM arithmetic is pinned to RFC 7677's vectors.
+- **D1a. One file stands in for the database where there is none** (`store.File`):
+  the same accounts, verifiers and sign-ins in one JSON file, 0600, read at
+  open and rewritten whole through a rename on every change, held by a lock
+  beside it while a writer is open. The `store.Store` interface is what the
+  handlers and the commands see, so neither knows which holds the rows. It is
+  for a deployment too small for a jail and for the tests, which now run
+  without PostgreSQL and against it in CI; a rewrite per change is a few
+  kilobytes at that scale, and a service that outgrows it moves to the
+  database, since the operator's `account` commands are the same. Passed over:
+  SQLite, a C dependency or a Go port the size of the service; an embedded
+  key-value store, a dependency for three tables.
 - **D2. A sign-in is opaque.** 32 random bytes in the bearer alphabet, whose
   SHA-256 the store keeps; one per device, named, revocable one by one, sliding
   over 30 days and renewed past half its life on the router's question. A JWT
@@ -83,10 +94,11 @@ cmd/identity          flags → config; wires the rest; two http.Servers; the sw
                       the operator's migrate and account commands
 internal/config       the flags and their checks; ReadSecretFile; the KDF profile
 internal/pg           the PostgreSQL client: Config, ParseURL, TLSConfig, Pool, Tx, Rows, Error
-internal/store        accounts, verifiers, sign-ins: one statement a method; Migrate, CheckSchema
+internal/store        Store, the interface; PG, one statement a method, Migrate, CheckSchema; File, one JSON file
 internal/api          /vif/api/auth/: the routes table, the handlers, the budgets, Refusal, ReadJSON
 internal/introspect   POST /introspect on the second listener
 internal/dbtest       the test database the environment names; a test skips without one
+internal/storetest    the store a test runs against: PostgreSQL when named, a file otherwise
 internal/version      the build's identity
 schema                setup.sql, the numbered migrations, Migrations()
 ```
@@ -94,7 +106,7 @@ schema                setup.sql, the numbered migrations, Migrations()
 Dependencies point down: `api` and `introspect` use `store`, `store` uses `pg`
 and `schema`, `config` uses `pg` for the URL's check, `introspect` uses `api`
 for the error form, and the tests use `dbtest`, which uses `pg`. `cmd/identity`
-alone knows every package. The only module beyond the standard library is
+alone knows every package, and alone chooses the store. The only module beyond the standard library is
 `lixenwraith/auth`, for `Credential`, `ScramServer` and the SCRAM message types
 the API carries.
 
@@ -160,7 +172,8 @@ configured outside this repository):
   `deploy/identity.service`: the state directory for the decoy key, the
   database password as a systemd credential, two loopback listeners, under 256
   MiB. Its update needs no empty fleet, since its restart pauses only sign-ins
-  and account tickets.
+  and account tickets. A deployment without a jail keeps the store file in the
+  same state directory (D1a).
 - **The jail** runs PostgreSQL 18 on the host's internal network with the
   server's certificate, `hostssl` and SCRAM-SHA-256 for the role from the node's
   address alone, provisioned by `schema/setup.sql`, migrated by the numbered

@@ -55,11 +55,13 @@ there in the same PR.
   is already exercised elsewhere.
 - A test derives a credential at a low Argon2 cost (`auth.WithMemory`,
   `auth.WithTime`); the default costs 64 MiB a derivation.
-- A test against the database takes it from `dbtest.Pool`, which skips without
+- A handler, command or store test takes its store from `storetest.Open`: a
+  file in the test's temporary directory, or PostgreSQL when
   `IDENTITY_TEST_DB_URL`, `IDENTITY_TEST_DB_CA` and
-  `IDENTITY_TEST_DB_PASSWORD_FILE`, and holds a file lock while the test runs,
-  since the packages' tests share one database. CI provides a PostgreSQL 18
-  service with TLS turned on.
+  `IDENTITY_TEST_DB_PASSWORD_FILE` name one (`dbtest.Pool`, which holds a file
+  lock while the test runs, since the packages' tests share one database). A
+  test of the client itself needs the database and skips without it. CI
+  provides a PostgreSQL 18 service with TLS turned on.
 
 ## Docs and commits
 
@@ -92,9 +94,10 @@ there in the same PR.
 ## Gates
 
 `go build ./...`, `go vet ./...`, `gofmt -l` with the toolchain's own gofmt
-(`make fmt-check`) and `go test ./...` with the test database set, so the
-database tests run; `make verify` runs them with the static and `linux/arm64`
-builds and a syntax check of the deploy scripts.
+(`make fmt-check`) and `go test ./...`, with the test database set when the
+change touches `internal/pg` or a statement, so the database runs too; `make
+verify` runs them with the static and `linux/arm64` builds and a syntax check
+of the deploy scripts.
 - Do not run `-race` tests unless investigating a known/suspected race issue; CI
   runs them.
 - A change to a SQL file is applied to a fresh PostgreSQL 18 before it lands, and
@@ -113,8 +116,10 @@ builds and a syntax check of the deploy scripts.
   `Exec` without arguments is one simple query and may hold several statements
   (a migration); with arguments it is prepared and bound, so no value is ever
   spliced into SQL. Its SCRAM client is pinned to RFC 7677's vectors.
-- Every statement lives in `internal/store`, one method each, unqualified names
-  resolved by the role's `search_path`. A schema change is a new `schema/NNN_*.sql`
+- Every statement lives in `internal/store`, one method of `PG` each, unqualified
+  names resolved by the role's `search_path`; `File` answers the same `Store`
+  interface from one JSON file, and a change to one backend's behaviour is a
+  change to both, under the shared tests. A schema change is a new `schema/NNN_*.sql`
   that records its own version and grants the runtime role what it needs; a
   released migration is never edited.
 - The HTTP surface is `api.routes`. Every body is bounded (`api.MaxBody`) and

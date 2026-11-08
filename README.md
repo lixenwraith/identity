@@ -14,8 +14,9 @@ account service in a session of its own, and the game binary never names a
 database driver.
 
 **Status: v0.2.0, the service as designed.** The routes, the PostgreSQL client
-on the standard library, the operator's commands, the hourly sweep and the
-deployment's updater, each tested against a real PostgreSQL.
+on the standard library, a file store for a deployment too small for a
+database, the operator's commands, the hourly sweep and the deployment's
+updater, each tested against the file and against a real PostgreSQL.
 [doc/todo.md](doc/todo.md) lists what remains: the budget's readings, the
 jail's address filter, and an operator's change reaching the running service
 without a restart.
@@ -35,6 +36,8 @@ without a restart.
 - Accounts live in PostgreSQL 18 in a FreeBSD jail, reached from the node over
   the host's internal network with TLS and a SCRAM-SHA-256 role password read
   from a 0600 file. The client is the service's own, on the standard library.
+  A deployment too small for a database keeps them in one JSON file instead
+  (`-store-file`), rewritten whole on each change.
 - Nothing here is a JWT. `lixenwraith/auth` is taken for Argon2id and SCRAM,
   and for nothing else.
 
@@ -73,7 +76,7 @@ bin/identity \
     -db-ca-file /etc/identity/db-ca.crt
 ```
 
-The operator's commands take the same database flags, after the command:
+The operator's commands take the same store flags, after the command:
 `identity migrate` applies the embedded migrations; `identity account add
 <name>` reads a password from the terminal, or from standard input when it is
 not one, and derives the credential on the server under the configured
@@ -81,11 +84,13 @@ profile; `account disable|enable|delete <name>`, `account reset <name>` (a new
 credential, every sign-in deleted) and `account list`. An account added or
 reset is loaded by the service at its next start.
 
-The tests that need a database take it from `IDENTITY_TEST_DB_URL` (the
-service's URL form), `IDENTITY_TEST_DB_CA` (the server's certificate) and
-`IDENTITY_TEST_DB_PASSWORD_FILE` (the role's password, a 0600 file), and skip
-without them; CI runs them against PostgreSQL 18 with TLS turned on
-(`.github/workflows/test.yml` sets the server up).
+The handler, introspection, command and store tests run against a file store
+in a temporary directory, and against PostgreSQL when `IDENTITY_TEST_DB_URL`
+(the service's URL form), `IDENTITY_TEST_DB_CA` (the server's certificate) and
+`IDENTITY_TEST_DB_PASSWORD_FILE` (the role's password, a 0600 file) name one;
+the client's own tests need it and skip without it. CI runs everything against
+PostgreSQL 18 with TLS turned on (`.github/workflows/test.yml` sets the server
+up).
 
 The flags, each with its default in `-h`:
 
@@ -94,6 +99,10 @@ The flags, each with its default in `-h`:
   Both must bind a loopback address, and they must differ.
 - `-state-dir` (`/var/lib/identity`, or systemd's `$STATE_DIRECTORY`): the
   decoy key's directory, 0700; the key is made at first start.
+- `-store-file`: the absolute path of a JSON file holding the accounts in
+  place of PostgreSQL, 0600, made at first start and held by the running
+  service; the database flags are then ignored, and an operator's change runs
+  while the service is stopped (`account list` reads beside it).
 - `-db-url`: `postgres://user@host[:port]/database[?sslmode=verify-full]`. A
   password in it, any other `sslmode` or any other parameter is refused.
   `-db-password-file`: the role's password, a 0600 file. `-db-ca-file`: the PEM
@@ -140,7 +149,8 @@ placeholders. [deploy/README.md](deploy/README.md) says where each file lands.
   `hostssl` and SCRAM-SHA-256 from the node's address alone, the server's
   certificate copied to the node. [schema/README.md](schema/README.md) is the
   procedure, `schema/setup.sql` the provisioning, `schema/001_init.sql` the
-  first migration, `deploy/backup.sh` the nightly `pg_dump`.
+  first migration, `deploy/backup.sh` the nightly `pg_dump`. Without a jail,
+  `IDENTITY_STORE_FILE` names the file instead ([deploy/README.md](deploy/README.md)).
 
 ## Documentation
 

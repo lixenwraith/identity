@@ -19,6 +19,20 @@ document or a code comment now states, and link that instead.
 - `lixenwraith/auth` v0.5.2 is the first release with `ScramServer.Abandon`,
   which frees a handshake whose client dropped after the challenge.
 
+## The file store
+
+- `store.File` holds its lock on `<path>.lock`, never on the store file: each
+  write lands by rename, so a lock on the file itself would be on the inode
+  the rename retires. A read-only open takes no lock and sees a complete file,
+  since the rename is atomic.
+- Every change is applied to a copy and written before the copy becomes the
+  store, so a failed write leaves memory and disk agreeing. The tests of
+  `store` run over both backends (`backends`); the handler and command tests
+  take `storetest.Open`, a file unless the environment names a database.
+- A test holding a `*store.File` holds its lock: the command test releases it
+  around each `cli` call (`Target.Reopen`) and reads the fresh handle after,
+  never one kept from before.
+
 ## The PostgreSQL client
 
 - `internal/pg/scram_test.go` pins the client to RFC 7677 §3's exchange (user

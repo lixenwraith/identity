@@ -70,6 +70,31 @@ node# systemctl restart identity    # an account added or reset is loaded at the
 
 `account list`, `disable`, `enable`, `reset` and `delete` take the same flags.
 
+## Without PostgreSQL
+
+A deployment too small for a database, or a test node, keeps the accounts in
+one JSON file under the unit's state directory, rewritten whole on each change
+and held by the running service. Install the settings file with
+`IDENTITY_STORE_FILE=/var/lib/identity/store.json` and skip the password and
+certificate; the unit expects both, so a drop-in lets it start without them:
+
+```sh
+node# systemctl edit identity    # then paste:
+[Unit]
+ConditionPathExists=
+ConditionPathExists=/etc/identity/identity.env
+[Service]
+LoadCredential=
+```
+
+`deploy/update-identity.sh` then builds, installs and probes as above, without
+a migration: the service makes the file at first start and brings it to its
+format itself. An operator's `account` command that changes the file runs
+while the service is stopped, since the service holds the file; `account
+list` reads beside it. Back the file up as any file: it holds verifiers and
+token hashes, never a password, but a copy signs nobody in and still names
+every account.
+
 ## The jail
 
 Nightly at 03:30 as `postgres`, keeping 14 days under the postgres home's

@@ -38,11 +38,11 @@ type Account struct {
 }
 
 type Handler struct {
-	store  *store.Store
+	store  store.Store
 	logger *slog.Logger
 }
 
-func New(s *store.Store, logger *slog.Logger) *Handler {
+func New(s store.Store, logger *slog.Logger) *Handler {
 	if logger == nil {
 		logger = slog.Default()
 	}

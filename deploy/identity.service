@@ -27,6 +27,7 @@ LoadCredential=db-password:/etc/identity/db-password
 ExecStart=/usr/local/bin/identity \
     -listen ${IDENTITY_LISTEN} \
     -introspect-listen ${IDENTITY_INTROSPECT_LISTEN} \
+    -store-file ${IDENTITY_STORE_FILE} \
     -db-url ${IDENTITY_DB_URL} \
     -db-password-file %d/db-password \
     -db-ca-file ${IDENTITY_DB_CA_FILE} \
@@ -37,7 +38,8 @@ ExecStart=/usr/local/bin/identity \
 Restart=on-failure
 RestartSec=3s
 TimeoutStopSec=20s
-# /var/lib/identity holds the decoy key, 0600, and nothing else is written.
+# /var/lib/identity holds the decoy key, 0600, and the store file when one is
+# configured; nothing else is written.
 StateDirectory=identity
 StateDirectoryMode=0700
 UMask=0077

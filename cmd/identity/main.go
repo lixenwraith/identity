@@ -1,11 +1,13 @@
 // Command identity is the account service for vif: registration, sign-in by
 // Argon2-SCRAM, sign-ins per device and their revocation on /vif/api/auth/,
 // and on a second loopback listener the router's one question, which account
-// a token names. Accounts live in PostgreSQL as verifiers, never passwords;
-// identity migrate and identity account are the operator's commands on them.
+// a token names. Accounts live in PostgreSQL, or in one file for a small
+// deployment, as verifiers, never passwords; identity migrate and identity
+// account are the operator's commands on them.
 package main
 
 import (
+	"cmp"
 	"context"
 	"crypto/rand"
 	"encoding/base64"
@@ -97,14 +99,34 @@ func database(cfg config.Config) (pg.Config, error) {
 	return dbCfg, nil
 }
 
+// openStore is the configured store: the file -store-file names, held for the
+// process's life, or PostgreSQL through a pool; close releases either. A command
+// that only reads takes the file without its lock, so it runs beside the service.
+func openStore(ctx context.Context, cfg config.Config, readOnly bool) (store.Store, func(), error) {
+	if cfg.StoreFile != "" {
+		f, err := store.OpenFile(cfg.StoreFile, readOnly)
+		if err != nil {
+			return nil, nil, err
+		}
+		return f, func() { _ = f.Close() }, nil
+	}
+	dbCfg, err := database(cfg)
+	if err != nil {
+		return nil, nil, err
+	}
+	openCtx, cancel := context.WithTimeout(ctx, openTimeout)
+	pool, err := pg.Open(openCtx, dbCfg)
+	cancel()
+	if err != nil {
+		return nil, nil, fmt.Errorf("database: %w", err)
+	}
+	return store.NewPG(pool), func() { _ = pool.Close() }, nil
+}
+
 func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	ctx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	dbCfg, err := database(cfg)
-	if err != nil {
-		return err
-	}
 	key, err := decoyKey(cfg.StateDir)
 	if err != nil {
 		return err
@@ -116,14 +138,11 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	}
 	defer scram.Stop()
 
-	openCtx, cancel := context.WithTimeout(ctx, openTimeout)
-	pool, err := pg.Open(openCtx, dbCfg)
-	cancel()
+	st, closeStore, err := openStore(ctx, cfg, false)
 	if err != nil {
-		return fmt.Errorf("database: %w", err)
+		return err
 	}
-	defer pool.Close()
-	st := store.New(pool)
+	defer closeStore()
 	if err := st.CheckSchema(ctx); err != nil {
 		return err
 	}
@@ -169,7 +188,7 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	go func() { errCh <- servers[0].Serve(listener) }()
 	go func() { errCh <- servers[1].Serve(introListener) }()
 	logger.Info("identity listening", "listen", cfg.Listen, "introspect", cfg.IntrospectListen,
-		"accounts", len(verifiers), "version", version.String())
+		"accounts", len(verifiers), "store", cmp.Or(cfg.StoreFile, "postgresql"), "version", version.String())
 
 	select {
 	case err := <-errCh:
@@ -191,7 +210,7 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 
 // sweep deletes expired sign-ins once an hour: no lookup finds them, so this
 // is housekeeping, and the count at info says how the table breathes.
-func sweep(ctx context.Context, st *store.Store, logger *slog.Logger) {
+func sweep(ctx context.Context, st store.Store, logger *slog.Logger) {
 	ticker := time.NewTicker(sweepInterval)
 	defer ticker.Stop()
 	for {

@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"regexp"
 	"testing"
 	"time"
@@ -68,23 +70,37 @@ func credential(t *testing.T, name string) *auth.Credential {
 	return cred
 }
 
-// fresh is a store on a database migrated from nothing.
-func fresh(t *testing.T) (*Store, context.Context) {
+// backends runs a test over each store at hand: the file always, PostgreSQL
+// when the environment names one, so the two keep one behaviour.
+func backends(t *testing.T, run func(t *testing.T, s Store, ctx context.Context)) {
 	t.Helper()
-	pool := dbtest.Pool(t)
-	dbtest.Reset(t, pool)
-	s := New(pool)
-	ctx := context.Background()
-	if _, _, err := s.Migrate(ctx); err != nil {
-		t.Fatal(err)
-	}
-	return s, ctx
+	t.Run("file", func(t *testing.T) {
+		f, err := OpenFile(filepath.Join(t.TempDir(), "store.json"), false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = f.Close() })
+		run(t, f, context.Background())
+	})
+	t.Run("pg", func(t *testing.T) {
+		if os.Getenv(dbtest.URLVar) == "" {
+			t.Skipf("%s is not set", dbtest.URLVar)
+		}
+		pool := dbtest.Pool(t)
+		dbtest.Reset(t, pool)
+		s := NewPG(pool)
+		ctx := context.Background()
+		if _, _, err := s.Migrate(ctx); err != nil {
+			t.Fatal(err)
+		}
+		run(t, s, ctx)
+	})
 }
 
 func TestMigrateBringsADatabaseToTheBinarysVersionOnce(t *testing.T) {
 	pool := dbtest.Pool(t)
 	dbtest.Reset(t, pool)
-	s := New(pool)
+	s := NewPG(pool)
 	ctx := context.Background()
 	if err := s.CheckSchema(ctx); !errors.Is(err, ErrSchema) {
 		t.Fatalf("an empty database passed the schema check: %v", err)
@@ -101,7 +117,10 @@ func TestMigrateBringsADatabaseToTheBinarysVersionOnce(t *testing.T) {
 }
 
 func TestAnAccountHasOneNameAndOneVerifierUnderTheCap(t *testing.T) {
-	s, ctx := fresh(t)
+	backends(t, testAccounts)
+}
+
+func testAccounts(t *testing.T, s Store, ctx context.Context) {
 	cred := credential(t, "alice")
 	a, err := s.CreateAccount(ctx, "Alice", VerifierOf("", cred), 0)
 	if err != nil || a.Name != "alice" || a.ID == "" || a.DisabledAt != nil {
@@ -163,7 +182,10 @@ func TestAnAccountHasOneNameAndOneVerifierUnderTheCap(t *testing.T) {
 }
 
 func TestASignInLivesUntilRevokedExpiredOrDisabled(t *testing.T) {
-	s, ctx := fresh(t)
+	backends(t, testSignIns)
+}
+
+func testSignIns(t *testing.T, s Store, ctx context.Context) {
 	a, err := s.CreateAccount(ctx, "alice", VerifierOf("", credential(t, "alice")), 0)
 	if err != nil {
 		t.Fatal(err)

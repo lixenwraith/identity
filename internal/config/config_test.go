@@ -78,6 +78,7 @@ func TestASettingIsRefusedByName(t *testing.T) {
 		{[]string{"-db-password-file", "/x"}, "-db-url is required"},
 		{[]string{"-db-url", "postgres://identity:pw@db.example.test/identity", "-db-password-file", "/x"}, "-db-url:"},
 		{[]string{"-db-url", "postgres://identity@db.example.test/identity"}, "-db-password-file is required"},
+		{[]string{"-store-file", "store.json"}, "-store-file"},
 		{slices.Concat(required, []string{"-db-pool", "0"}), "-db-pool"},
 		{slices.Concat(required, []string{"-log-level", "loud"}), "-log-level"},
 		{slices.Concat(required, []string{"-max-accounts", "-1"}), "-max-accounts"},
@@ -91,6 +92,19 @@ func TestASettingIsRefusedByName(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%v: got %v, want an error naming %q", tc.args, err, tc.want)
 		}
+	}
+}
+
+// A file store wants no database: the unit still renders the database flags,
+// which are then ignored, placeholder URL and all.
+func TestAFileStoreNeedsNoDatabaseFlags(t *testing.T) {
+	cfg, err := Parse([]string{"-store-file", "/var/lib/identity/store.json", "-db-url", "postgres://identity@<jail-address>:5432/identity",
+		"-db-password-file", "/run/credentials/identity/db-password"}, &bytes.Buffer{})
+	if err != nil || cfg.StoreFile != "/var/lib/identity/store.json" {
+		t.Fatalf("Parse = %+v, %v", cfg, err)
+	}
+	if _, err := Parse([]string{"-store-file", "/var/lib/identity/store.json"}, &bytes.Buffer{}); err != nil {
+		t.Fatalf("a file store alone: %v", err)
 	}
 }
 

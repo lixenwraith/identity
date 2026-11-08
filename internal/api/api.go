@@ -63,7 +63,7 @@ var idPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f
 // Options is what the handler needs beside the request: the store, the SCRAM
 // server loaded with every verifier, and the deployment's policy.
 type Options struct {
-	Store               *store.Store
+	Store               store.Store
 	Scram               *auth.ScramServer
 	KDF                 config.KDF
 	MaxAccounts         int

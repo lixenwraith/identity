@@ -13,7 +13,7 @@ import (
 // transaction under an advisory lock, so two migrators serialize and a failed
 // upgrade leaves the previous version whole. It issues no DDL when the schema
 // is current, so a runtime role without the right to alter it can start.
-func (s *Store) Migrate(ctx context.Context) (from, to int, err error) {
+func (s *PG) Migrate(ctx context.Context) (from, to int, err error) {
 	list, err := schema.Migrations()
 	if err != nil {
 		return 0, 0, err
@@ -46,7 +46,7 @@ func (s *Store) Migrate(ctx context.Context) (from, to int, err error) {
 
 // CheckSchema holds the database to the version the binary was built for,
 // without touching it: the service's gate at start.
-func (s *Store) CheckSchema(ctx context.Context) error {
+func (s *PG) CheckSchema(ctx context.Context) error {
 	list, err := schema.Migrations()
 	if err != nil {
 		return err

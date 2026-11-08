@@ -13,7 +13,6 @@ import (
 	"text/tabwriter"
 
 	"github.com/lixenwraith/identity/internal/config"
-	"github.com/lixenwraith/identity/internal/pg"
 	"github.com/lixenwraith/identity/internal/store"
 
 	"github.com/lixenwraith/auth"
@@ -22,10 +21,11 @@ import (
 const cliUsage = `Usage: identity migrate [flags]
        identity account add|disable|enable|reset|list|delete [<name>] [flags]
 
-The operator's commands over the store, with the service's database flags.
-add and reset read the password from the terminal, or from standard input
-when it is not one; the service loads a new or reset credential at its next
-start.`
+The operator's commands over the store, with the service's store flags. add
+and reset read the password from the terminal, or from standard input when it
+is not one; the service loads a new or reset credential at its next start. A
+file store is held by the running service: stop it for a change, list reads
+beside it.`
 
 var errUsage = errors.New("usage")
 
@@ -56,18 +56,11 @@ func cli(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		}
 		return err
 	}
-	dbCfg, err := database(cfg)
+	st, closeStore, err := openStore(ctx, cfg, verb == "list")
 	if err != nil {
 		return err
 	}
-	openCtx, cancel := context.WithTimeout(ctx, openTimeout)
-	pool, err := pg.Open(openCtx, dbCfg)
-	cancel()
-	if err != nil {
-		return fmt.Errorf("database: %w", err)
-	}
-	defer pool.Close()
-	st := store.New(pool)
+	defer closeStore()
 	if args[0] == "migrate" {
 		from, to, err := st.Migrate(ctx)
 		if err != nil {
@@ -86,7 +79,7 @@ func cli(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	return account(ctx, st, cfg, verb, name, stdin, stdout, stderr)
 }
 
-func account(ctx context.Context, st *store.Store, cfg config.Config, verb, name string, stdin io.Reader, stdout, stderr io.Writer) error {
+func account(ctx context.Context, st store.Store, cfg config.Config, verb, name string, stdin io.Reader, stdout, stderr io.Writer) error {
 	if verb == "list" {
 		list, err := st.Accounts(ctx)
 		if err != nil {
