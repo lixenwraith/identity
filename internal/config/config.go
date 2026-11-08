@@ -43,6 +43,7 @@ type Config struct {
 	Listen              string
 	IntrospectListen    string
 	StateDir            string
+	StoreFile           string
 	DatabaseURL         string
 	DBPasswordFile      string
 	DBCAFile            string
@@ -63,16 +64,21 @@ func Parse(args []string, output io.Writer) (Config, error) {
 	set := flag.NewFlagSet(Name, flag.ContinueOnError)
 	set.SetOutput(output)
 	set.Usage = func() {
-		fmt.Fprintf(output, "Usage: %s [flags]\n\nThe account service: /vif/api/auth/ for the router to forward,\n"+
-			"and the router's introspection, both on loopback. Accounts live in PostgreSQL.\n\nFlags:\n", Name)
+		fmt.Fprintf(output, "Usage: %s [flags]\n       %s migrate [flags]\n       %s account add|disable|enable|reset|list|delete [<name>] [flags]\n\n"+
+			"The account service: /vif/api/auth/ for the router to forward, and the router's\n"+
+			"introspection, both on loopback. Accounts live in PostgreSQL, or in one file for a\n"+
+			"small deployment; migrate and account are the operator's commands on them, with the\n"+
+			"same store flags.\n\nFlags:\n", Name, Name, Name)
 		set.PrintDefaults()
 	}
 	set.StringVar(&cfg.Listen, "listen", "127.0.0.1:9082", "the /vif/api/auth/ listener the router forwards to (loopback)")
 	set.StringVar(&cfg.IntrospectListen, "introspect-listen", "127.0.0.1:9083",
 		"the introspection listener the router asks which account a token names (loopback)")
 	set.StringVar(&cfg.StateDir, "state-dir", defaultStateDir(), "directory of the decoy key, 0700")
+	set.StringVar(&cfg.StoreFile, "store-file", "",
+		"absolute path of a JSON file holding the accounts in place of PostgreSQL, for a small deployment or a test; the -db-* flags are then ignored")
 	set.StringVar(&cfg.DatabaseURL, "db-url", "",
-		"postgres://user@host[:port]/database[?sslmode=verify-full], without a password (required)")
+		"postgres://user@host[:port]/database[?sslmode=verify-full], without a password (required without -store-file)")
 	set.StringVar(&cfg.DBPasswordFile, "db-password-file", "", "0600 file holding the database role's password (required)")
 	set.StringVar(&cfg.DBCAFile, "db-ca-file", "",
 		"PEM certificate the database is verified against: the server's own or its issuer's; empty trusts the system roots")
@@ -143,8 +149,29 @@ func (c Config) Validate() error {
 	if !filepath.IsAbs(c.StateDir) {
 		return fmt.Errorf("-state-dir %q must be an absolute path", c.StateDir)
 	}
+	if err := c.checkStore(); err != nil {
+		return err
+	}
+	if c.MaxAccounts < 0 {
+		return fmt.Errorf("-max-accounts %d must not be negative", c.MaxAccounts)
+	}
+	if h := c.ClientAddressHeader; h != "" && !headerPattern.MatchString(h) {
+		return fmt.Errorf("invalid -client-address-header %q", h)
+	}
+	return c.KDF.check()
+}
+
+// checkStore wants one store: the file, whole in its flag, or the database
+// with its password file; the database flags are not read beside a file.
+func (c Config) checkStore() error {
+	if c.StoreFile != "" {
+		if !filepath.IsAbs(c.StoreFile) {
+			return fmt.Errorf("-store-file %q must be an absolute path", c.StoreFile)
+		}
+		return nil
+	}
 	if c.DatabaseURL == "" {
-		return errors.New("-db-url is required")
+		return errors.New("-db-url is required without -store-file")
 	}
 	if _, err := pg.ParseURL(c.DatabaseURL); err != nil {
 		return fmt.Errorf("-db-url: %w", err)
@@ -155,13 +182,7 @@ func (c Config) Validate() error {
 	if c.DBPool < 1 || c.DBPool > 64 {
 		return fmt.Errorf("-db-pool %d must be 1 to 64", c.DBPool)
 	}
-	if c.MaxAccounts < 0 {
-		return fmt.Errorf("-max-accounts %d must not be negative", c.MaxAccounts)
-	}
-	if h := c.ClientAddressHeader; h != "" && !headerPattern.MatchString(h) {
-		return fmt.Errorf("invalid -client-address-header %q", h)
-	}
-	return c.KDF.check()
+	return nil
 }
 
 // check holds the profile within what auth will verify: a credential derived
