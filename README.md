@@ -1,7 +1,7 @@
 <p align="center">
   <a href="https://golang.org"><img src="https://img.shields.io/badge/Go-1.27.3-00ADD8?style=flat&logo=go" alt="Go"></a>
   <a href="https://opensource.org/licenses/BSD-3-Clause"><img src="https://img.shields.io/badge/License-BSD_3--Clause-blue.svg" alt="License"></a>
-  <img src="https://img.shields.io/badge/Status-v0.2.0-blue" alt="Status: v0.2.0">
+  <img src="https://img.shields.io/badge/Status-v0.2.1-blue" alt="Status: v0.2.1">
 </p>
 
 # identity
@@ -13,7 +13,7 @@ generic, so [chess](https://github.com/lixenwraith/chess) can adopt it as its
 account service in a session of its own, and the game binary never names a
 database driver.
 
-**Status: v0.2.0, the service as designed.** The routes, the PostgreSQL client
+**Status: v0.2.1, the service as designed.** The routes, the PostgreSQL client
 on the standard library, a file store for a deployment too small for a
 database, the operator's commands, the hourly sweep and the deployment's
 updater, each tested against the file and against a real PostgreSQL.
