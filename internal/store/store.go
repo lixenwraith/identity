@@ -103,6 +103,12 @@ type SignIn struct {
 	ExpiresAt  time.Time
 }
 
+// Now is the store's clock: UTC to the microsecond, which is what timestamptz
+// keeps, so a time written and read back compares equal.
+func Now() time.Time {
+	return time.Now().UTC().Truncate(time.Microsecond)
+}
+
 // HashToken is what a sign-in row keeps of a token, so a copy of the table
 // signs nobody in; a lookup hashes the presented token the same way.
 func HashToken(token string) []byte {
@@ -177,7 +183,7 @@ func (s *Store) CreateAccount(ctx context.Context, name string, v Verifier, maxA
 			return Account{}, ErrAccountsFull
 		}
 	}
-	a := Account{ID: NewID(), Name: name, CreatedAt: time.Now().UTC()}
+	a := Account{ID: NewID(), Name: name, CreatedAt: Now()}
 	if _, err := tx.Exec(ctx, `INSERT INTO accounts (account_id, name, created_at) VALUES ($1, $2, $3)`,
 		a.ID, a.Name, a.CreatedAt); err != nil {
 		if pg.IsUniqueViolation(err) {
@@ -279,7 +285,7 @@ func (s *Store) Accounts(ctx context.Context) ([]Account, error) {
 func (s *Store) SetDisabled(ctx context.Context, id string, disabled bool) error {
 	var at *time.Time
 	if disabled {
-		now := time.Now().UTC()
+		now := Now()
 		at = &now
 	}
 	return s.one(ctx, `UPDATE accounts SET disabled_at = $2 WHERE account_id = $1`, id, at)
