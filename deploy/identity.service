@@ -1,0 +1,78 @@
+# The identity service on the node. Installed as /etc/systemd/system/identity.service;
+# its settings are /etc/identity/identity.env (deploy/identity.env), the database
+# password a 0600 file systemd hands it as a credential. A local change belongs
+# in a drop-in (systemctl edit identity), never in this file.
+
+[Unit]
+Description=vif identity service: accounts and sign-ins
+Documentation=https://github.com/lixenwraith/identity
+Wants=network-online.target
+After=network-online.target
+ConditionPathExists=/etc/identity/identity.env
+ConditionPathExists=/etc/identity/db-password
+# A broken configuration stops after five tries instead of looping forever.
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=exec
+User=identity
+Group=identity
+EnvironmentFile=/etc/identity/identity.env
+# The password reaches the process through systemd's credentials directory
+# (%d), readable by this service alone: never the environment, never an argument.
+LoadCredential=db-password:/etc/identity/db-password
+# An empty variable expands to an empty argument, which identity reads as the
+# flag's default; the state directory is $STATE_DIRECTORY, read without a flag.
+ExecStart=/usr/local/bin/identity \
+    -listen ${IDENTITY_LISTEN} \
+    -introspect-listen ${IDENTITY_INTROSPECT_LISTEN} \
+    -db-url ${IDENTITY_DB_URL} \
+    -db-password-file %d/db-password \
+    -db-ca-file ${IDENTITY_DB_CA_FILE} \
+    -db-pool ${IDENTITY_DB_POOL} \
+    -max-accounts ${IDENTITY_MAX_ACCOUNTS} \
+    -client-address-header ${IDENTITY_CLIENT_ADDRESS_HEADER} \
+    -log-level ${IDENTITY_LOG_LEVEL}
+Restart=on-failure
+RestartSec=3s
+TimeoutStopSec=20s
+# /var/lib/identity holds the decoy key, 0600, and nothing else is written.
+StateDirectory=identity
+StateDirectoryMode=0700
+UMask=0077
+LimitNOFILE=1024
+TasksMax=64
+MemoryMax=256M
+
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+PrivateDevices=yes
+PrivateTmp=yes
+ProtectClock=yes
+ProtectControlGroups=yes
+ProtectHome=yes
+ProtectHostname=yes
+ProtectKernelLogs=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectProc=invisible
+ProcSubset=pid
+ProtectSystem=strict
+# Loopback for its two listeners and the host's internal network for the
+# jail's PostgreSQL; a drop-in may add IPAddressDeny=any with IPAddressAllow=
+# for localhost and the jail's address once the deployment names them.
+RestrictAddressFamilies=AF_INET AF_INET6
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+RemoveIPC=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+
+[Install]
+WantedBy=multi-user.target

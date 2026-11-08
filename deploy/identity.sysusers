@@ -1,0 +1,3 @@
+# Type Name     ID         GECOS                  Home              Shell
+g      identity -
+u      identity -:identity "vif identity service" /var/lib/identity -

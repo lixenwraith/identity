@@ -1,0 +1,12 @@
+.idea
+bin/
+dev/
+log/
+logs/
+tmp/
+*.log
+*.pass
+*.dump
+build.sh
+catalog.txt
+combined.txt

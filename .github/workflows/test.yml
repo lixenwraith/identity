@@ -1,0 +1,22 @@
+name: Test
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - run: go vet ./...
+      - name: gofmt -l
+        run: out=$(gofmt -l .); [ -z "$out" ] || { echo "$out"; exit 1; }
+      - run: go test -timeout 60s -race ./...
+        env:
+          GORACE: halt_on_error=1
+      - run: CGO_ENABLED=0 go build -o /dev/null ./cmd/identity
+      - run: CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o /dev/null ./cmd/identity
+      - run: bash -n deploy/backup.sh
