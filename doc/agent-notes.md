@@ -103,6 +103,10 @@ document or a code comment now states, and link that instead.
   with `ALTER SYSTEM` and `pg_reload_conf()`, both reloadable, and runs
   `setup.sql`; production stays `verify-full` only, with no test-only mode in
   the client.
+- A workflow GitHub cannot evaluate fails with no jobs and the file's path as
+  its name, which is all the API shows. A job's `env` has no `runner` context
+  (`${{ runner.temp }}` there rejects the file); a step's `env` has, so the
+  database variables sit on the test step.
 
 ## Design
 
