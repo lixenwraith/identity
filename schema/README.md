@@ -52,22 +52,24 @@ nightly `pg_dump`. Addresses here are placeholders.
    hostssl   identity  identity  <node-address>/32   scram-sha-256
    ```
 
-5. Reload, then provision. The role's password is generated into a 0600 file
-   and reaches `psql` as a variable, so it is in neither this repository nor
-   the shell history; the same file's content becomes the node's
-   `/etc/identity/db-password`:
+5. Reload, then provision, from a copy of `schema/` that `postgres` can read
+   (not under `/root`). The role's password is generated into a 0600 file and
+   reaches `psql` as a variable, so it is in neither this repository nor the
+   shell history; root's shell reads the file, which `postgres` cannot, and
+   `setup.sql` refuses an empty password. The same file's content becomes the
+   node's `/etc/identity/db-password`:
 
    ```sh
    jail# (umask 077; openssl rand -base64 24 > /root/identity.db-password)
-   jail# su -m postgres -c "psql -X -d postgres -v password=\"'\$(cat /root/identity.db-password)'\" -f schema/setup.sql"
+   jail# su -m postgres -c "psql -X -d postgres -v password=\"'$(cat /root/identity.db-password)'\" -f schema/setup.sql"
    ```
 
    Split mode adds `-v split=true`.
 6. Migrate, as the schema's owner, each file in one transaction and in order:
 
    ```sh
-   jail# su -m postgres -c "psql -X -1 -d identity -c 'SET ROLE identity' -f schema/001_init.sql"          # owner mode
-   jail# su -m postgres -c "psql -X -1 -d identity -c 'SET ROLE identity_owner' -f schema/001_init.sql"    # split mode
+   jail# su -m postgres -c "psql -X -1 -v ON_ERROR_STOP=1 -d identity -c 'SET ROLE identity' -f schema/001_init.sql"          # owner mode
+   jail# su -m postgres -c "psql -X -1 -v ON_ERROR_STOP=1 -d identity -c 'SET ROLE identity_owner' -f schema/001_init.sql"    # split mode
    ```
 
    In owner mode the node may migrate instead, with the role's own connection:
@@ -86,11 +88,12 @@ jail# su -m postgres -c "psql -X -d identity -c '\drds'"                        
 jail# sockstat -4 -6 -l | grep postgres                                                           # the internal address alone
 ```
 
-From the node, the role connects over TLS and nothing else does:
+From the node, as root since `/etc/identity` is 0750, the role connects over
+TLS and nothing else does:
 
 ```sh
-node$ psql 'postgres://identity@<jail-address>:5432/identity?sslmode=verify-full&sslrootcert=/etc/identity/db-ca.crt' -Atc 'SHOW search_path'   # identity
-node$ psql 'postgres://identity@<jail-address>:5432/postgres?sslmode=verify-full&sslrootcert=/etc/identity/db-ca.crt' -c 'SELECT 1'            # refused by pg_hba
+node# PGPASSWORD="$(cat /etc/identity/db-password)" psql -X 'postgres://identity@<jail-address>:5432/identity?sslmode=verify-full&sslrootcert=/etc/identity/db-ca.crt' -Atc 'SHOW search_path'   # identity
+node# PGPASSWORD="$(cat /etc/identity/db-password)" psql -X 'postgres://identity@<jail-address>:5432/postgres?sslmode=verify-full&sslrootcert=/etc/identity/db-ca.crt' -c 'SELECT 1'            # refused by pg_hba
 ```
 
 Administration uses the `postgres` account over the socket. Its `search_path`
@@ -112,8 +115,12 @@ sign-in row signs that device out at its next request.
 
 `deploy/backup.sh` runs `pg_dump --format=custom` as `postgres` and keeps 14
 days (`IDENTITY_BACKUP_KEEP`); [deploy/README.md](../deploy/README.md) installs
-and schedules it. Restore into a freshly provisioned database:
+and schedules it. Restore into a provisioned database whose schema is empty:
+freshly provisioned, or emptied with `DROP SCHEMA identity CASCADE; CREATE
+SCHEMA identity AUTHORIZATION identity` (split mode: `identity_owner`, then
+`GRANT USAGE ON SCHEMA identity TO identity`). `-n identity` restores that
+schema's objects alone; the rest is `setup.sql`'s, which the role may not redo:
 
 ```sh
-jail# su -m postgres -c 'pg_restore --no-owner --role=identity -d identity <dump>'   # --role=identity_owner in split mode
+jail# su -m postgres -c 'pg_restore --no-owner --role=identity -n identity -d identity <dump>'   # --role=identity_owner in split mode
 ```

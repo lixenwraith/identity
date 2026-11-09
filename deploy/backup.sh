@@ -1,13 +1,9 @@
 #!/usr/bin/env bash
-# Nightly logical backup of the identity database, run on the jail as the
-# postgres account over the Unix socket: pg_dump --format=custom into
-# IDENTITY_BACKUP_DIR (default backups/ in the postgres home), kept for
-# IDENTITY_BACKUP_KEEP days (default 14). Installed as
-# /usr/local/sbin/identity-backup and scheduled by cron (deploy/README.md).
-#
-# Restore into a freshly provisioned database as the postgres account:
-#   pg_restore --no-owner --role=identity -d identity <dump>
-# (--role=identity_owner for the split-privilege setup).
+# Nightly logical backup of the identity database, run on the jail as postgres
+# over the Unix socket: pg_dump --format=custom into IDENTITY_BACKUP_DIR (default
+# backups/ in the postgres home), kept IDENTITY_BACKUP_KEEP days (default 14).
+# Installed as /usr/local/sbin/identity-backup and scheduled by cron
+# (deploy/README.md); the restore is schema/README.md's.
 set -euo pipefail
 PATH=/sbin:/bin:/usr/sbin:/usr/bin:/usr/local/sbin:/usr/local/bin
 ((BASH_VERSINFO[0] >= 5)) || { echo "identity-backup: bash 5 or newer is required" >&2; exit 1; }
