@@ -12,6 +12,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -443,4 +444,38 @@ func rowsAffected(tag string) int64 {
 		return n
 	}
 	return 0
+}
+
+// alive reports whether an idle connection still has a server behind it, by a
+// non-blocking read of its socket: nothing waiting is a live, quiet server; an end
+// of file is one that closed it, after a restart; bytes nobody asked for are an
+// error or a notice the next request would misread. A connection whose socket
+// cannot be asked is taken as alive.
+func (c *conn) alive() bool {
+	raw := c.net
+	if secured, ok := raw.(*tls.Conn); ok {
+		raw = secured.NetConn()
+	}
+	sysConn, ok := raw.(syscall.Conn)
+	if !ok {
+		return true
+	}
+	rc, err := sysConn.SyscallConn()
+	if err != nil {
+		return true
+	}
+	live := true
+	var probe [1]byte
+	err = rc.Read(func(fd uintptr) bool {
+		n, err := syscall.Read(int(fd), probe[:])
+		switch {
+		case err == syscall.EAGAIN || err == syscall.EWOULDBLOCK:
+		case err == nil && n == 0:
+			live = false
+		default:
+			live = false
+		}
+		return true
+	})
+	return err == nil && live
 }

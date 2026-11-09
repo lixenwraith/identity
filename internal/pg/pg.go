@@ -108,7 +108,8 @@ func (c Config) check() error {
 // Pool hands out connections to one server, at most MaxConns at once, and
 // retries nothing: a statement that failed is the caller's to repeat. A slot
 // is held while a connection is in use; an idle connection waits for the next
-// caller, and one that failed on the wire is dropped.
+// caller, probed before it is handed out, and one that failed on the wire or
+// that the server closed meanwhile is dropped.
 type Pool struct {
 	cfg    Config
 	slots  chan struct{}
@@ -161,17 +162,24 @@ func (p *Pool) acquire(ctx context.Context) (*conn, error) {
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
-	select {
-	case c := <-p.idle:
-		return c, nil
-	default:
+	for {
+		select {
+		case c := <-p.idle:
+			// A connection the server closed while it was idle, as a restart does,
+			// is found here rather than by the request it would have failed.
+			if c.alive() {
+				return c, nil
+			}
+			c.close()
+		default:
+			c, err := dial(ctx, p.cfg)
+			if err != nil {
+				<-p.slots
+				return nil, err
+			}
+			return c, nil
+		}
 	}
-	c, err := dial(ctx, p.cfg)
-	if err != nil {
-		<-p.slots
-		return nil, err
-	}
-	return c, nil
 }
 
 // release returns a connection that is whole and idle; one that broke, or

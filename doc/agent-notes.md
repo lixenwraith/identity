@@ -29,6 +29,12 @@ document or a code comment now states, and link that instead.
 
 ## The PostgreSQL client
 
+- An idle pooled connection is probed before reuse (`conn.alive`): a non-blocking
+  one-byte read on the socket under the TLS layer (`tls.Conn.NetConn`), where
+  `EAGAIN` is a live quiet server, end of file a closed one and any byte an
+  unasked error or notice. The TLS record layer is never read by the probe, so a
+  live connection is handed out whole.
+
 - `internal/pg/scram_test.go` pins the client to RFC 7677 §3's exchange (user
   `user`, password `pencil`, both nonces given): a change to the arithmetic
   fails there before it fails against a server.
