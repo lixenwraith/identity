@@ -217,7 +217,9 @@ func loopback(addr string) error {
 
 // ReadSecretFile reads a secret the way an SSH key is read: a regular file
 // that group and others cannot open, trailing line breaks dropped so a file
-// an editor or `openssl rand` wrote works as it is.
+// an editor or `openssl rand` wrote works as it is. A systemd credential is
+// 0400 with an ACL granting the service user read, which stat shows as group
+// read; directly in $CREDENTIALS_DIRECTORY, private to the unit, that is allowed.
 func ReadSecretFile(path string) ([]byte, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -231,7 +233,11 @@ func ReadSecretFile(path string) ([]byte, error) {
 	if !info.Mode().IsRegular() {
 		return nil, fmt.Errorf("%s is not a regular file", path)
 	}
-	if perm := info.Mode().Perm(); perm&0o077 != 0 {
+	private := os.FileMode(0o077)
+	if dir := os.Getenv("CREDENTIALS_DIRECTORY"); dir != "" && filepath.Dir(filepath.Clean(path)) == filepath.Clean(dir) {
+		private = 0o037
+	}
+	if perm := info.Mode().Perm(); perm&private != 0 {
 		return nil, fmt.Errorf("%s has mode %04o; group and others must have no access (chmod 600)", path, perm)
 	}
 	data, err := io.ReadAll(io.LimitReader(f, maxSecretBytes+1))
