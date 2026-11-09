@@ -1,24 +1,8 @@
--- Provision the identity database on PostgreSQL 18. Run once on the jail as
--- the superuser, with the role's password in a psql variable so it reaches
--- neither this file nor the shell history (schema/README.md):
---
---   psql -X -d postgres -v password="'$(cat identity.db-password)'" -f setup.sql                 # owner mode
---   psql -X -d postgres -v password="'$(cat identity.db-password)'" -v split=true -f setup.sql   # split mode
---
--- Owner mode (default): the login role identity owns schema identity, so it
--- may apply the migrations itself. It has no other right.
---
--- Split mode: the NOLOGIN role identity_owner owns the schema and its tables;
--- identity receives only what each migration grants it, rows to read and
--- write, and can alter nothing.
---
--- Migrations are applied on the jail as the owner, in order, each in one
--- transaction (schema/README.md):
---   psql -X -1 -d identity -c 'SET ROLE identity' -f 001_init.sql          # owner mode
---   psql -X -1 -d identity -c 'SET ROLE identity_owner' -f 001_init.sql    # split mode
---
--- The role authenticates from the node over TLS with SCRAM-SHA-256, which
--- pg_hba.conf admits with one hostssl line; no other TCP client is admitted.
+-- Provision the identity database on PostgreSQL 18, once, as the superuser, the
+-- role's password in a psql variable (schema/README.md has the commands):
+--   psql -X -d postgres -v password="'<password>'" [-v split=true] -f setup.sql
+-- Owner mode: the login role identity owns schema identity and may migrate it.
+-- Split mode: NOLOGIN identity_owner owns it; identity only reads and writes rows.
 \set ON_ERROR_STOP on
 \if :{?split}
 \else
@@ -27,6 +11,12 @@
 \if :{?password}
 \else
 \echo 'setup.sql: pass the role password as -v password="''<password>''"'
+\endif
+-- An empty password would create the role with none; refuse it before anything exists.
+SELECT length(:password) > 0 AS password_given \gset
+\if :password_given
+\else
+DO $$BEGIN RAISE EXCEPTION 'setup.sql: the password is empty'; END$$;
 \endif
 
 -- The verifier PostgreSQL stores is SCRAM, whatever the server default says.
