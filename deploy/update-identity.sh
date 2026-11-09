@@ -1,9 +1,9 @@
 #!/bin/sh
-# Build and deploy identity from this checkout, with its settings from
-# deploy/identity.env and the node's IDENTITY_DB_URL and IDENTITY_STORE_FILE carried
-# over from the installed file. A database is migrated before the new binary
-# starts; one known-good binary, env and unit is kept as .previous and restored when
-# the new service does not come up. --render prints the env file it would install.
+# Build and deploy identity from this checkout: deploy/identity.env's settings with
+# the node's IDENTITY_DB_URL and IDENTITY_STORE_FILE carried over, the database
+# migrated before the new binary starts, the previous binary, env and unit kept as
+# .previous and restored if the new service does not come up, and a first install
+# that does not come up removed. --render prints the env file it would install.
 set -eu
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -82,6 +82,17 @@ fi
 stage_root=$(mktemp -d "${TMPDIR:-/tmp}/identity-update.XXXXXX")
 service_stopped=false
 rollback_required=false
+uninstall_required=false
+# A first install that failed is taken away, or the next run would see an update
+# of a service that never ran.
+uninstall() {
+	echo "$0: first install failed; removing it" >&2
+	sudo journalctl -u identity.service -n 5 --no-pager -o cat >&2 || true
+	sudo systemctl disable --now identity.service >/dev/null 2>&1 || true
+	sudo rm -f -- "$binary" "$installed_unit"
+	sudo systemctl daemon-reload
+	sudo systemctl reset-failed identity.service >/dev/null 2>&1 || true
+}
 rollback() {
 	echo "$0: update failed; restoring the previous identity" >&2
 	sudo journalctl -u identity.service -n 5 --no-pager -o cat >&2 || true
@@ -98,6 +109,8 @@ cleanup() {
 	if [ "$status" -ne 0 ]; then
 		if [ "$rollback_required" = true ]; then
 			rollback || status=1
+		elif [ "$uninstall_required" = true ]; then
+			uninstall || status=1
 		elif [ "$service_stopped" = true ]; then
 			sudo systemctl start identity.service || status=1
 		fi
@@ -138,6 +151,8 @@ if [ "$first_install" = false ]; then
 	sudo install -o root -g identity -m 0640 "$installed_env" "$backup_env"
 	sudo install -o root -g root -m 0644 "$installed_unit" "$backup_unit"
 	rollback_required=true
+else
+	uninstall_required=true
 fi
 
 sudo install -o root -g root -m 0755 "$repo_root/bin/identity" "$binary"
@@ -171,5 +186,6 @@ sudo cmp -s "$repo_root/bin/identity" "$binary"
 sudo cat "$installed_env" | cmp -s "$stage_root/identity.env.next" -
 
 rollback_required=false
+uninstall_required=false
 service_stopped=false
 echo "updated identity at revision $(git -C "$repo_root" rev-parse HEAD)"

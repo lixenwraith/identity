@@ -9,15 +9,9 @@ document or a code comment now states, and link that instead.
 
 ## Toolchain
 
-- The `gofmt` on a container's `PATH` can be older than the module's Go; run
-  `"$(go env GOROOT)/bin/gofmt" -l`, which `make fmt-check` does. With
-  `GOTOOLCHAIN=auto` the `go` on `PATH` switches to the version `go.mod`
-  names, downloading it once.
-- `go mod tidy` drops `lixenwraith/auth` from `go.mod` while no package imports
-  it yet; the store, the api and the config do, so a tidy after any of them
-  compiles keeps it.
-- `lixenwraith/auth` v0.5.2 is the first release with `ScramServer.Abandon`,
-  which frees a handshake whose client dropped after the challenge.
+- With `GOTOOLCHAIN=auto` the `go` on `PATH` switches to the version `go.mod`
+  names, downloading it once; the `gofmt` on `PATH` does not, which is why
+  `make fmt-check` runs the toolchain's own.
 
 ## The file store
 
@@ -110,14 +104,8 @@ document or a code comment now states, and link that instead.
 
 ## Design
 
-- The design of record is vif's `doc/auth-session-design.md`; this repository's
-  `doc/design.md` adds the service's own decisions. §10 of vif's catalog names
-  no identity package, which is why the client is `internal/pg` and the rest is
-  named by what it does.
+- §10 of vif's catalog names no identity package, which is why the client is
+  `internal/pg` and the rest is named by what it does.
 - The sign-in cookie is scoped to `/vif/`, not `/vif/api/`: the router reads
   it on the browser route's upgrade at `/vif/ws/<id>`, which a narrower path
   would never carry it to.
-- The service loads every verifier at start and the CLI writes the store, so
-  `account add` and `reset` take effect at the next start; `disable` and
-  `delete` are read at the proof and at introspection, so they take effect at
-  once.

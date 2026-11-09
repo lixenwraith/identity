@@ -53,7 +53,8 @@ the unit, then starts the service and probes it: a route outside the table
 answers `404` and `POST /introspect` with a random token answers
 `{"account":null}`. On an update it stops the service first and keeps the
 previous binary, settings and unit, restored if the new service does not
-answer; the restart pauses sign-ins and account tickets alone, so it needs no
+answer; a first install that does not answer is removed, so the next run
+installs afresh; the restart pauses sign-ins and account tickets alone, so it needs no
 empty fleet. `--render` prints the settings it would install.
 `journalctl -u identity` holds the JSON log, which names no credential. Where
 the router forwards `/vif/api/auth/` to and where it asks its question are the
