@@ -147,3 +147,27 @@ func TestASecretFileIsPrivateAndTrimmed(t *testing.T) {
 		t.Fatal("a directory was read as a secret")
 	}
 }
+
+// systemd's ACL mask reads as group read on a credential; only there is it allowed.
+func TestASystemdCredentialMayShowGroupRead(t *testing.T) {
+	creds, elsewhere := t.TempDir(), t.TempDir()
+	t.Setenv("CREDENTIALS_DIRECTORY", creds)
+	credential, other := filepath.Join(creds, "db-password"), filepath.Join(elsewhere, "decoy.key")
+	for _, path := range []string{credential, other} {
+		if err := os.WriteFile(path, []byte("hunter22\n"), 0o440); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got, err := ReadSecretFile(credential); err != nil || string(got) != "hunter22" {
+		t.Fatalf("ReadSecretFile(credential) = %q, %v", got, err)
+	}
+	if _, err := ReadSecretFile(other); err == nil {
+		t.Fatal("a group-readable secret outside the credentials directory was read")
+	}
+	if err := os.Chmod(credential, 0o444); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadSecretFile(credential); err == nil {
+		t.Fatal("a world-readable credential was read")
+	}
+}

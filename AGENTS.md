@@ -135,7 +135,8 @@ of the deploy scripts.
   which accounts exist. `auth.ScramServer` holds every verifier and the decoy
   key, which lives in the state directory alone.
 - Secrets reach the process through files: `config.ReadSecretFile` (a regular
-  file, 0600, trimmed) for the database password and the decoy key; never a flag
+  file, 0600 or, in `$CREDENTIALS_DIRECTORY` alone, systemd's 0440 ACL mask,
+  trimmed) for the database password and the decoy key; never a flag
   value, an environment variable or a URL.
 - Comparisons of secrets are constant time (`crypto/subtle`, `hmac.Equal`), and
   an unknown name costs what a wrong password does.
