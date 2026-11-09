@@ -107,7 +107,8 @@ The flags, each with its default in `-h`:
   password in it, any other `sslmode` or any other parameter is refused.
   `-db-password-file`: the role's password, a 0600 file. `-db-ca-file`: the PEM
   certificate the server is verified against, its own or its issuer's; empty
-  trusts the system roots. `-db-pool` (10): connections held at most.
+  trusts the system roots. `-db-pool` (10): connections held at most; an idle
+  one is probed before it is handed out, so a database restart costs no request.
 - `-kdf-memory` (65536 KiB), `-kdf-time` (3), `-kdf-threads` (4): the one
   profile every credential is derived under.
 - `-max-accounts` (0, no cap); `-client-address-header` (`X-Real-IP`): the
